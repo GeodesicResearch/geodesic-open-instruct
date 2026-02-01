@@ -79,6 +79,8 @@ class DPOTrainModule(TrainModule):
         self._total_rejected_logps = torch.tensor(0.0, device=device)
         self._total_chosen_rewards = torch.tensor(0.0, device=device)
         self._total_rejected_rewards = torch.tensor(0.0, device=device)
+        self._total_accuracy = torch.tensor(0.0, device=device)
+        self._total_margin = torch.tensor(0.0, device=device)
         self._total_aux_loss = torch.tensor(0.0, device=device) if args.load_balancing_loss else None
 
         if args.packing:
@@ -161,6 +163,8 @@ class DPOTrainModule(TrainModule):
         self._total_rejected_logps.zero_()
         self._total_chosen_rewards.zero_()
         self._total_rejected_rewards.zero_()
+        self._total_accuracy.zero_()
+        self._total_margin.zero_()
         if self._total_aux_loss is not None:
             self._total_aux_loss.zero_()
         total_loss = self._total_loss
@@ -168,6 +172,8 @@ class DPOTrainModule(TrainModule):
         total_rejected_logps = self._total_rejected_logps
         total_chosen_rewards = self._total_chosen_rewards
         total_rejected_rewards = self._total_rejected_rewards
+        total_accuracy = self._total_accuracy
+        total_margin = self._total_margin
         total_aux_loss = self._total_aux_loss
 
         for micro_batch_idx, micro_batch in enumerate(micro_batches):
@@ -209,6 +215,8 @@ class DPOTrainModule(TrainModule):
                 if self.args.loss_type.computes_reward_metrics:
                     total_chosen_rewards += chosen_rewards.mean().detach() / num_micro_batches
                     total_rejected_rewards += rejected_rewards.mean().detach() / num_micro_batches
+                    total_accuracy += (chosen_rewards > rejected_rewards).float().mean().detach() / num_micro_batches
+                    total_margin += (chosen_rewards - rejected_rewards).mean().detach() / num_micro_batches
                 if total_aux_loss is not None and aux_loss is not None:
                     total_aux_loss += aux_loss.detach() / num_micro_batches
 
@@ -222,15 +230,13 @@ class DPOTrainModule(TrainModule):
             self.record_metric("train/logps_rejected", total_rejected_logps, ReduceType.mean)
 
             if self.args.loss_type.computes_reward_metrics:
-                accuracy = (total_chosen_rewards > total_rejected_rewards).float()
-                margin = total_chosen_rewards - total_rejected_rewards
                 self.record_metric("train/rewards_chosen", total_chosen_rewards, ReduceType.mean)
                 self.record_metric("train/rewards_rejected", total_rejected_rewards, ReduceType.mean)
                 self.record_metric(
                     "train/rewards_average", (total_chosen_rewards + total_rejected_rewards) / 2, ReduceType.mean
                 )
-                self.record_metric("train/rewards_accuracy", accuracy, ReduceType.mean)
-                self.record_metric("train/rewards_margin", margin, ReduceType.mean)
+                self.record_metric("train/rewards_accuracy", total_accuracy, ReduceType.mean)
+                self.record_metric("train/rewards_margin", total_margin, ReduceType.mean)
 
             chosen_lengths = (batch["chosen_labels"] != -100).sum()
             rejected_lengths = (batch["rejected_labels"] != -100).sum()

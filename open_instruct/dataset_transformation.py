@@ -2049,6 +2049,12 @@ def get_cached_dataset_tulu_with_statistics(
             dataset_config_seed,
         )
         dataset_config_hash = compute_config_hash(dcs, tc)
+        logger.info(f"Computed dataset_config_hash = {dataset_config_hash}")
+        for i, dc in enumerate(dcs):
+            dc_dict = _get_serializable_dataset_config_dict(dc, exclude_none=True)
+            logger.info(f"DatasetConfig[{i}] fields: {dc_dict}")
+        tc_dict = {k: v for k, v in asdict(tc).items() if v is not None}
+        logger.info(f"TokenizerConfig fields: {tc_dict}")
     else:
         dcs = []
     if dataset_cache_mode == "local":

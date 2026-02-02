@@ -149,7 +149,7 @@ class DPOTrainModule(TrainModule):
         micro_batches = split_batch_dpo(batch, self.rank_microbatch_size)
         num_micro_batches = len(micro_batches)
 
-        if self._batch_counter < 3:
+        if not dry_run and self._batch_counter < 3:
             batch_indices = batch.get("index", "N/A")
             if hasattr(batch_indices, "tolist"):
                 batch_indices = batch_indices.tolist()
@@ -186,7 +186,7 @@ class DPOTrainModule(TrainModule):
                     output_router_logits=self.args.load_balancing_loss,
                 )
 
-                if self._batch_counter < 3 and micro_batch_idx == 0:
+                if not dry_run and self._batch_counter < 3 and micro_batch_idx == 0:
                     logger.info(
                         f"DEBUG [dpo.py] batch={self._batch_counter} micro_batch=0 "
                         f"chosen_logps={policy_chosen_logps.tolist()} "
@@ -222,7 +222,8 @@ class DPOTrainModule(TrainModule):
 
                 loss.backward()
 
-        self._batch_counter += 1
+        if not dry_run:
+            self._batch_counter += 1
 
         if not dry_run:
             self.record_metric("train/loss", total_loss, ReduceType.mean)

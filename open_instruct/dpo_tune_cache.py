@@ -346,6 +346,8 @@ def main(args: dpo_utils.ExperimentConfig, tc: TokenizerConfig):
 
     model = load_model()
     logger.info("=============model loaded")
+    weight_sum = sum(p.sum().item() for p in model.parameters())
+    logger.info(f"DEBUG model_weight_sum={weight_sum}")
     print_gpu_stats(init_gpu_memory)
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch

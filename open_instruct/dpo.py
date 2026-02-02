@@ -114,6 +114,9 @@ def _setup_model(args: dpo_utils.ExperimentConfig, device: torch.device):
     model.load_state_dict(state_dict)
     model = model.to(device=device, dtype=torch.bfloat16)
 
+    weight_sum = sum(p.sum().item() for p in model.parameters())
+    logger.info(f"DEBUG model_weight_sum={weight_sum}")
+
     logger.info(f"Applying activation checkpointing (budget={args.activation_memory_budget})...")
     model.apply_activation_checkpointing(
         TransformerActivationCheckpointingMode.budget, activation_memory_budget=args.activation_memory_budget

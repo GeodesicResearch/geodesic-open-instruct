@@ -121,11 +121,8 @@ def _setup_model(args: dpo_utils.ExperimentConfig, device: torch.device):
     for name, p in converted_state_dict.items():
         if "blocks.0" in name or "embed" in name or "lm_head" in name:
             logger.info(f"DEBUG converted weight {name}: sum={p.sum().item():.6f} shape={list(p.shape)}")
-    state_dict = model.state_dict()
-    for key in sorted(converted_state_dict.keys()):
-        state_dict[key] = converted_state_dict[key]
-    model.load_state_dict(state_dict)
-    model = model.to(device=device, dtype=torch.bfloat16)
+    model.load_state_dict(converted_state_dict, assign=True)
+    model = model.to(device=device)
 
     weight_sum = sum(p.sum().item() for p in model.parameters())
     logger.info(f"DEBUG model_weight_sum={weight_sum}")

@@ -1157,18 +1157,23 @@ def concatenated_forward_olmo(
         packed_logits = model(packed_input_ids, doc_lens=doc_lens, max_doc_lens=[max_doc_len]).to(torch.float32)
 
         rejected_start_packed = int(cu_doc_lens[1].item())
-        input_token_at_0 = packed_input_ids[0, 0].item()
-        input_token_at_rejected_start = packed_input_ids[0, rejected_start_packed].item()
-        logits_match = (packed_logits[0, 0, :5] == packed_logits[0, rejected_start_packed, :5]).all().item()
+        logits_match_pos0 = (packed_logits[0, 0, :5] == packed_logits[0, rejected_start_packed, :5]).all().item()
+        chosen_tokens_0_10 = packed_input_ids[0, 0:10].tolist()
+        rejected_tokens_0_10 = packed_input_ids[0, rejected_start_packed : rejected_start_packed + 10].tolist()
+        tokens_0_10_match = chosen_tokens_0_10 == rejected_tokens_0_10
+        chosen_logits_pos1 = packed_logits[0, 1, :5].tolist()
+        rejected_logits_pos1 = packed_logits[0, rejected_start_packed + 1, :5].tolist()
+        logits_match_pos1 = chosen_logits_pos1 == rejected_logits_pos1
         logger.info(
             f"DEBUG [OLMo forward] "
             f"packed_logits.shape={packed_logits.shape} "
-            f"packed_logits[0,0,:5]={packed_logits[0, 0, :5].tolist()} "
-            f"packed_logits[0,{rejected_start_packed},:5]={packed_logits[0, rejected_start_packed, :5].tolist()} "
-            f"packed_logits[0,-1,:5]={packed_logits[0, -1, :5].tolist()} "
-            f"input_tokens_match={input_token_at_0 == input_token_at_rejected_start} "
-            f"(token0={input_token_at_0}, token_rej_start={input_token_at_rejected_start}) "
-            f"RoPE_check_logits_match={logits_match}"
+            f"RoPE_check_pos0={logits_match_pos0} "
+            f"tokens_0_10_match={tokens_0_10_match} "
+            f"chosen_tokens[0:10]={chosen_tokens_0_10} "
+            f"rejected_tokens[0:10]={rejected_tokens_0_10} "
+            f"logits_match_pos1={logits_match_pos1} "
+            f"chosen_logits[1,:5]={chosen_logits_pos1} "
+            f"rejected_logits[1,:5]={rejected_logits_pos1}"
         )
 
         batch_size = concatenated_batch["concatenated_input_ids"].shape[0]

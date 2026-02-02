@@ -118,6 +118,9 @@ def _setup_model(args: dpo_utils.ExperimentConfig, device: torch.device):
         hf_model.config, hf_state, model_type=getattr(hf_model.config, "model_type", None)
     )
     del hf_model
+    for name, p in converted_state_dict.items():
+        if "blocks.0" in name or "embed" in name or "lm_head" in name:
+            logger.info(f"DEBUG converted weight {name}: sum={p.sum().item():.6f} shape={list(p.shape)}")
     state_dict = model.state_dict()
     for key in sorted(converted_state_dict.keys()):
         state_dict[key] = converted_state_dict[key]

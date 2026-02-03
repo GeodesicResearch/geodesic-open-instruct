@@ -261,7 +261,8 @@ def main(args: dpo_utils.ExperimentConfig, tc: TokenizerConfig):
             dataset_local_cache_dir=args.local_cache_dir,
             dataset_skip_cache=args.skip_cache,
         )
-        train_dataset = train_dataset.shuffle(seed=args.seed)
+        if args.shuffle:
+            train_dataset = train_dataset.shuffle(seed=args.seed)
         train_dataset.set_format(type="pt")
     if accelerator.is_main_process:
         visualize_token(train_dataset[0][CHOSEN_INPUT_IDS_KEY], tokenizer)

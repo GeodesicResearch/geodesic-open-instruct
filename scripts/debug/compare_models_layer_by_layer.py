@@ -8,7 +8,6 @@ implementations by comparing outputs at each layer.
 import torch
 import transformers
 from olmo_core.nn.hf.convert import convert_state_from_hf
-from olmo_core.nn.transformer import TransformerConfig
 
 from open_instruct.olmo_core_utils import get_transformer_config
 
@@ -62,89 +61,123 @@ def main():
     print(f"Max diff: {embed_diff.max().item():.6e}")
     print(f"Mean diff: {embed_diff.mean().item():.6e}")
 
-    # Compare layer by layer
+    # Full forward pass comparison
     print("\n" + "=" * 60)
-    print("LAYER-BY-LAYER COMPARISON")
-    print("=" * 60)
-
-    # Get intermediate outputs from HuggingFace
-    hf_hidden = hf_embeds
-    olmo_hidden = olmo_embeds
-
-    num_layers = min(len(hf_model.model.layers), len(olmo_model.blocks))
-
-    for layer_idx in range(num_layers):
-        hf_layer = hf_model.model.layers[layer_idx]
-        olmo_block = olmo_model.blocks[layer_idx]
-
-        with torch.no_grad():
-            # HuggingFace layer forward
-            hf_out = hf_layer(
-                hf_hidden,
-                position_ids=torch.arange(seq_len, device=device).unsqueeze(0),
-            )
-            hf_hidden_new = hf_out[0]
-
-            # OLMo-core block forward (need to handle differently)
-            # OLMo-core uses a different interface
-            olmo_hidden_new = olmo_block(olmo_hidden)
-
-        layer_diff = (hf_hidden_new - olmo_hidden_new).abs()
-        max_diff = layer_diff.max().item()
-        mean_diff = layer_diff.mean().item()
-
-        # Check if difference is significant
-        status = "✓" if max_diff < 1e-3 else "✗"
-        print(f"Layer {layer_idx:2d}: max_diff={max_diff:.6e}, mean_diff={mean_diff:.6e} {status}")
-
-        if max_diff > 0.01:
-            # Drill down into this layer
-            print(f"  → Large diff detected, investigating...")
-
-            # Compare attention outputs
-            with torch.no_grad():
-                # HF attention
-                hf_normed = hf_layer.input_layernorm(hf_hidden)
-                olmo_normed = olmo_block.attention_norm(olmo_hidden)
-
-                norm_diff = (hf_normed - olmo_normed).abs().max().item()
-                print(f"  → After attention norm: max_diff={norm_diff:.6e}")
-
-        hf_hidden = hf_hidden_new
-        olmo_hidden = olmo_hidden_new
-
-    # Compare final outputs
-    print("\n" + "=" * 60)
-    print("FINAL OUTPUT COMPARISON")
+    print("FULL FORWARD PASS COMPARISON")
     print("=" * 60)
 
     with torch.no_grad():
-        # Final layer norm
-        hf_final_norm = hf_model.model.norm(hf_hidden)
-        olmo_final_norm = olmo_model.ln_f(olmo_hidden)
+        hf_logits = hf_model(input_ids).logits
+        olmo_logits = olmo_model(input_ids)
 
-        norm_diff = (hf_final_norm - olmo_final_norm).abs()
-        print(f"After final norm: max_diff={norm_diff.max().item():.6e}")
+    logits_diff = (hf_logits - olmo_logits).abs()
+    print(f"HF logits shape: {hf_logits.shape}")
+    print(f"OLMo logits shape: {olmo_logits.shape}")
+    print(f"Max diff: {logits_diff.max().item():.6e}")
+    print(f"Mean diff: {logits_diff.mean().item():.6e}")
 
-        # LM head
-        hf_logits = hf_model.lm_head(hf_final_norm)
-        olmo_logits = olmo_model.lm_head(olmo_final_norm)
+    # Find position with max diff
+    max_pos = logits_diff.argmax()
+    b, s, v = max_pos // (seq_len * 100352), (max_pos % (seq_len * 100352)) // 100352, max_pos % 100352
+    print(f"Max diff at position: batch={b.item()}, seq={s.item()}, vocab={v.item()}")
+    print(f"  HF value: {hf_logits[b, s, v].item():.6f}")
+    print(f"  OLMo value: {olmo_logits[b, s, v].item():.6f}")
 
-        logits_diff = (hf_logits - olmo_logits).abs()
-        print(f"Final logits: max_diff={logits_diff.max().item():.6e}")
+    # Compare per-position
+    print("\n" + "=" * 60)
+    print("PER-POSITION MAX DIFF")
+    print("=" * 60)
 
-        # Full forward pass comparison
-        hf_full_logits = hf_model(input_ids).logits
-        olmo_full_logits = olmo_model(input_ids)
+    for pos in range(min(10, seq_len)):
+        pos_diff = logits_diff[0, pos, :].max().item()
+        print(f"Position {pos:2d}: max_diff={pos_diff:.6e}")
 
-        full_diff = (hf_full_logits - olmo_full_logits).abs()
-        print(f"\nFull forward pass: max_diff={full_diff.max().item():.6e}")
-        print(f"Full forward pass: mean_diff={full_diff.mean().item():.6e}")
+    # Sample logits comparison
+    print("\n" + "=" * 60)
+    print("SAMPLE LOGITS AT POSITION 5")
+    print("=" * 60)
 
-        # Sample logits
-        print(f"\nSample logits at position 5:")
-        print(f"  HF:    {hf_full_logits[0, 5, :5].tolist()}")
-        print(f"  OLMo:  {olmo_full_logits[0, 5, :5].tolist()}")
+    print(f"HF:   {hf_logits[0, 5, :10].tolist()}")
+    print(f"OLMo: {olmo_logits[0, 5, :10].tolist()}")
+
+    # Compare intermediate layer outputs using hooks
+    print("\n" + "=" * 60)
+    print("LAYER-BY-LAYER HIDDEN STATE COMPARISON")
+    print("=" * 60)
+
+    hf_hidden_states = []
+    olmo_hidden_states = []
+
+    def hf_hook(module, input, output):
+        hf_hidden_states.append(output[0].detach())
+
+    def olmo_hook(module, input, output):
+        olmo_hidden_states.append(output.detach())
+
+    # Register hooks on each layer
+    hf_handles = []
+    olmo_handles = []
+
+    for i, layer in enumerate(hf_model.model.layers):
+        hf_handles.append(layer.register_forward_hook(hf_hook))
+
+    olmo_block_keys = list(olmo_model.blocks.keys())
+    for key in olmo_block_keys:
+        olmo_handles.append(olmo_model.blocks[key].register_forward_hook(olmo_hook))
+
+    # Run forward passes with hooks
+    with torch.no_grad():
+        _ = hf_model(input_ids)
+        _ = olmo_model(input_ids)
+
+    # Remove hooks
+    for h in hf_handles + olmo_handles:
+        h.remove()
+
+    # Compare layer outputs
+    num_layers = min(len(hf_hidden_states), len(olmo_hidden_states))
+    print(f"\nComparing {num_layers} layers:")
+
+    first_large_diff_layer = None
+    for i in range(num_layers):
+        diff = (hf_hidden_states[i] - olmo_hidden_states[i]).abs()
+        max_diff = diff.max().item()
+        mean_diff = diff.mean().item()
+        status = "✓" if max_diff < 1e-3 else "✗"
+        print(f"Layer {i:2d}: max_diff={max_diff:.6e}, mean_diff={mean_diff:.6e} {status}")
+
+        if max_diff > 0.01 and first_large_diff_layer is None:
+            first_large_diff_layer = i
+
+    if first_large_diff_layer is not None:
+        print(f"\nFirst layer with large diff: {first_large_diff_layer}")
+
+        # Investigate this layer more
+        print(f"\nInvestigating Layer {first_large_diff_layer}...")
+
+        hf_layer = hf_model.model.layers[first_large_diff_layer]
+        olmo_block = olmo_model.blocks[olmo_block_keys[first_large_diff_layer]]
+
+        # Get input to this layer
+        if first_large_diff_layer == 0:
+            hf_input = hf_embeds
+            olmo_input = olmo_embeds
+        else:
+            hf_input = hf_hidden_states[first_large_diff_layer - 1]
+            olmo_input = olmo_hidden_states[first_large_diff_layer - 1]
+
+        with torch.no_grad():
+            # Compare layer norms
+            hf_normed = hf_layer.input_layernorm(hf_input)
+            olmo_normed = olmo_block.attention_norm(olmo_input)
+            norm_diff = (hf_normed - olmo_normed).abs().max().item()
+            print(f"  Pre-attention norm diff: {norm_diff:.6e}")
+
+            # Compare post-attention norm
+            hf_post_norm = hf_layer.post_attention_layernorm(hf_input)
+            olmo_post_norm = olmo_block.feed_forward_norm(olmo_input)
+            post_norm_diff = (hf_post_norm - olmo_post_norm).abs().max().item()
+            print(f"  Pre-FFN norm diff: {post_norm_diff:.6e}")
 
 
 if __name__ == "__main__":

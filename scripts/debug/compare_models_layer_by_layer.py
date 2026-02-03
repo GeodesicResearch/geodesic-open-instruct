@@ -16,7 +16,7 @@ from open_instruct.olmo_core_utils import get_transformer_config
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--attn-backend", type=str, default="flash_2", choices=["flash_2", "sdpa"])
+    parser.add_argument("--attn-backend", type=str, default="flash_2", choices=["flash_2", "torch"])
     args = parser.parse_args()
 
     model_name = "allenai/OLMo-2-0425-1B"

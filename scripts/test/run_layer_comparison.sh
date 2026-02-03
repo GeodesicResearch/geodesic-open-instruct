@@ -10,6 +10,6 @@ uv run python scripts/debug/compare_models_layer_by_layer.py --attn-backend flas
 
 echo ""
 echo "========================================"
-echo "RUNNING WITH SDPA"
+echo "RUNNING WITH TORCH SDPA"
 echo "========================================"
-uv run python scripts/debug/compare_models_layer_by_layer.py --attn-backend sdpa
+uv run python scripts/debug/compare_models_layer_by_layer.py --attn-backend torch

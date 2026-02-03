@@ -290,8 +290,9 @@ def main():
     torch.manual_seed(42)
     doc1_len = 10
     doc2_len = 8
-    doc1_tokens = torch.randint(1, 100352, (doc1_len,), device=device)
-    doc2_tokens = torch.randint(1, 100352, (doc2_len,), device=device)
+    all_tokens = torch.randint(1, 100352, (doc1_len + doc2_len,), device=device)
+    doc1_tokens = all_tokens[:doc1_len]
+    doc2_tokens = all_tokens[doc1_len:]
 
     packed_input = torch.cat([doc1_tokens, doc2_tokens]).unsqueeze(0)
     doc_lens = torch.tensor([doc1_len, doc2_len], device=device)
@@ -339,6 +340,74 @@ def main():
     print(f"  Max diff: {hf_olmo_doc2_diff.max().item():.6e}")
     print(f"  Mean diff: {hf_olmo_doc2_diff.mean().item():.6e}")
 
+    # Test 6: Verify reproducibility with fresh forward passes
+    print("\n" + "=" * 60)
+    print("TEST 6: REPRODUCIBILITY CHECK (fresh forward passes)")
+    print("=" * 60)
+
+    torch.manual_seed(42)
+    test_input = torch.randint(1, 100352, (1, 15), device=device)
+
+    with torch.no_grad():
+        hf_pass1 = hf_model(test_input).logits
+        hf_pass2 = hf_model(test_input).logits
+        olmo_pass1 = olmo_model(test_input)
+        olmo_pass2 = olmo_model(test_input)
+
+    hf_self_diff = (hf_pass1 - hf_pass2).abs().max().item()
+    olmo_self_diff = (olmo_pass1 - olmo_pass2).abs().max().item()
+    hf_olmo_diff = (hf_pass1 - olmo_pass1).abs().max().item()
+
+    print(f"HF self-consistency: {hf_self_diff:.6e}")
+    print(f"OLMo self-consistency: {olmo_self_diff:.6e}")
+    print(f"HF vs OLMo: {hf_olmo_diff:.6e}")
+
+    # Test 7: Check if issue is with padding position encoding
+    print("\n" + "=" * 60)
+    print("TEST 7: SAME CONTENT, DIFFERENT PADDING LENGTHS")
+    print("=" * 60)
+
+    torch.manual_seed(42)
+    content_tokens = torch.randint(1, 100352, (1, 10), device=device)
+
+    input_no_pad = content_tokens
+    input_pad_5 = torch.cat([content_tokens, torch.zeros(1, 5, dtype=torch.long, device=device)], dim=1)
+    input_pad_10 = torch.cat([content_tokens, torch.zeros(1, 10, dtype=torch.long, device=device)], dim=1)
+
+    attn_no_pad = torch.ones(1, 10, device=device)
+    attn_pad_5 = torch.cat([torch.ones(1, 10, device=device), torch.zeros(1, 5, device=device)], dim=1)
+    attn_pad_10 = torch.cat([torch.ones(1, 10, device=device), torch.zeros(1, 10, device=device)], dim=1)
+
+    with torch.no_grad():
+        hf_no_pad = hf_model(input_no_pad, attention_mask=attn_no_pad).logits
+        hf_pad_5 = hf_model(input_pad_5, attention_mask=attn_pad_5).logits
+        hf_pad_10 = hf_model(input_pad_10, attention_mask=attn_pad_10).logits
+
+        olmo_no_pad = olmo_model(input_no_pad)
+        olmo_pad_5 = olmo_model(input_pad_5)
+        olmo_pad_10 = olmo_model(input_pad_10)
+
+    hf_content_no_pad = hf_no_pad[0, :10]
+    hf_content_pad_5 = hf_pad_5[0, :10]
+    hf_content_pad_10 = hf_pad_10[0, :10]
+
+    olmo_content_no_pad = olmo_no_pad[0, :10]
+    olmo_content_pad_5 = olmo_pad_5[0, :10]
+    olmo_content_pad_10 = olmo_pad_10[0, :10]
+
+    print("HF content comparison (with vs without padding):")
+    print(f"  no_pad vs pad_5: {(hf_content_no_pad - hf_content_pad_5).abs().max().item():.6e}")
+    print(f"  no_pad vs pad_10: {(hf_content_no_pad - hf_content_pad_10).abs().max().item():.6e}")
+
+    print("\nOLMo content comparison (with vs without padding):")
+    print(f"  no_pad vs pad_5: {(olmo_content_no_pad - olmo_content_pad_5).abs().max().item():.6e}")
+    print(f"  no_pad vs pad_10: {(olmo_content_no_pad - olmo_content_pad_10).abs().max().item():.6e}")
+
+    print("\nHF vs OLMo (content region only):")
+    print(f"  no_pad: {(hf_content_no_pad - olmo_content_no_pad).abs().max().item():.6e}")
+    print(f"  pad_5: {(hf_content_pad_5 - olmo_content_pad_5).abs().max().item():.6e}")
+    print(f"  pad_10: {(hf_content_pad_10 - olmo_content_pad_10).abs().max().item():.6e}")
+
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
@@ -347,6 +416,8 @@ def main():
     print("Test 3 (Batched forward): Check batch consistency")
     print("Test 4 (Batched with padding): Real DPO scenario")
     print("Test 5 (Packed vs batched): Check doc_lens implementation")
+    print("Test 6 (Reproducibility): Check self-consistency of both models")
+    print("Test 7 (Padding lengths): Check if padding affects content logits")
 
 
 if __name__ == "__main__":

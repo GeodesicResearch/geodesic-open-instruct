@@ -414,7 +414,8 @@ def main():
     print("=" * 60)
 
     print("Testing HF vs OLMo at different sequence lengths:")
-    for seq_len_test in range(8, 25):
+    failed_lengths = []
+    for seq_len_test in [1, 2, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 32, 48, 64, 128, 256, 512]:
         torch.manual_seed(42)
         test_input = torch.randint(1, 100352, (1, seq_len_test), device=device)
         with torch.no_grad():
@@ -422,7 +423,12 @@ def main():
             olmo_out = olmo_model(test_input)
         diff = (hf_out - olmo_out).abs().max().item()
         status = "✓" if diff == 0 else "✗"
-        print(f"  seq_len={seq_len_test:2d}: max_diff={diff:.6e} {status}")
+        print(f"  seq_len={seq_len_test:3d}: max_diff={diff:.6e} {status}")
+        if diff > 0:
+            failed_lengths.append(seq_len_test)
+
+    if failed_lengths:
+        print(f"\nFailed lengths: {failed_lengths}")
 
     print("\n" + "=" * 60)
     print("SUMMARY")

@@ -1141,6 +1141,7 @@ def concatenated_forward_olmo(
         concatenated_batch = concatenated_inputs(batch)
         input_ids = concatenated_batch["concatenated_input_ids"]
         labels = concatenated_batch["concatenated_labels"]
+        attention_mask = concatenated_batch["concatenated_attention_mask"]
 
         logger.info(
             f"DEBUG [OLMo forward] "
@@ -1151,7 +1152,13 @@ def concatenated_forward_olmo(
             f"rejected_input[445:450]={input_ids[1, 445:450].tolist()}"
         )
 
-        logits = model(input_ids).to(torch.float32)
+        # OLMo-core doesn't support attention_mask directly. We use doc_lens to achieve the same
+        # effect: pack sequences to remove padding, run the model with document masking, then
+        # unpack back to padded format. This ensures padding tokens aren't attended to.
+        packed_input_ids, _, cu_doc_lens, max_doc_len = pack_padded_sequences(input_ids, labels, attention_mask)
+        doc_lens = cu_doc_lens.diff()
+        packed_logits = model(packed_input_ids, doc_lens=doc_lens, max_doc_lens=[max_doc_len]).to(torch.float32)
+        logits = unpack_to_padded(packed_logits, cu_doc_lens, input_ids.shape[0], input_ids.shape[1], pad_value=0.0)
 
         label_mask_chosen = labels[0] != -100
         label_mask_rejected = labels[1] != -100

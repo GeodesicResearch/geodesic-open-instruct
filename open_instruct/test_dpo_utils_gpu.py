@@ -275,5 +275,129 @@ class TestConcatenatedVsSeparateForwardOlmo(unittest.TestCase):
         self.assertTrue(pos1_doc2_matches_sep, "pos1 doc2 should match separate (doc_lens should reset RoPE)")
 
 
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+@unittest.skipUnless(has_flash_attn_2(), "Flash attention required for document masking")
+class TestPackedVsBatchedForward(unittest.TestCase):
+    """Test that packed forward with doc_lens produces DIFFERENT results than batched forward.
+
+    This demonstrates the root cause of numerical differences between OLMo-core and HuggingFace
+    DPO implementations: OLMo-core uses packed sequences with doc_lens, while HuggingFace uses
+    standard batched forward. Even with identical inputs, these produce different logits.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        config = TransformerConfig.olmo2_1B(vocab_size=100352)
+        config.n_layers = 2
+        config.block.attention = AttentionConfig(
+            n_heads=config.block.attention.n_heads,
+            n_kv_heads=config.block.attention.n_kv_heads,
+            bias=config.block.attention.bias,
+            rope=config.block.attention.rope,
+            qk_norm=config.block.attention.qk_norm,
+            backend="flash_2",
+        )
+        cls.model = config.build().cuda().to(torch.bfloat16)
+
+    def test_batched_vs_packed_identical_sequences(self):
+        """Show that batched and packed forward give different results for identical sequences.
+
+        When we have two identical sequences:
+        - Batched forward: model(input_ids) with shape [2, seq_len]
+        - Packed forward: model(packed_ids, doc_lens=...) with shape [1, 2*seq_len]
+
+        Both should theoretically give the same results, but Flash Attention with doc_lens
+        introduces numerical differences.
+        """
+        seq_len = 20
+        seq = torch.randint(1, 100352, (1, seq_len)).cuda()
+
+        batched_input = seq.repeat(2, 1)
+        packed_input = seq.repeat(1, 2)
+        doc_lens = torch.tensor([seq_len, seq_len], device="cuda")
+
+        with torch.no_grad():
+            logits_batched = self.model(batched_input)
+            logits_packed = self.model(packed_input, doc_lens=doc_lens, max_doc_lens=[seq_len])
+
+        logits_batched_seq0 = logits_batched[0]
+        logits_batched_seq1 = logits_batched[1]
+        logits_packed_doc0 = logits_packed[0, :seq_len]
+        logits_packed_doc1 = logits_packed[0, seq_len:]
+
+        batched_seq0_matches_seq1 = torch.allclose(logits_batched_seq0, logits_batched_seq1, atol=1e-5)
+        packed_doc0_matches_doc1 = torch.allclose(logits_packed_doc0, logits_packed_doc1, atol=1e-5)
+        batched_matches_packed_doc0 = torch.allclose(logits_batched_seq0, logits_packed_doc0, atol=1e-3)
+
+        logger.info(f"Batched seq0 matches seq1 (should be True): {batched_seq0_matches_seq1}")
+        logger.info(f"Packed doc0 matches doc1 (should be True): {packed_doc0_matches_doc1}")
+        logger.info(f"Batched matches packed doc0 (may differ): {batched_matches_packed_doc0}")
+
+        max_diff = (logits_batched_seq0 - logits_packed_doc0).abs().max().item()
+        logger.info(f"Max absolute difference between batched and packed: {max_diff}")
+
+        self.assertTrue(
+            batched_seq0_matches_seq1, "Batched forward should give identical results for identical inputs"
+        )
+        self.assertTrue(packed_doc0_matches_doc1, "Packed forward should give identical results for identical docs")
+
+    def test_dpo_forward_batched_vs_packed(self):
+        """Compare DPO forward with batched (HF-style) vs packed (OLMo-style) approach.
+
+        This test shows that the current concatenated_forward_olmo (which packs sequences)
+        produces different logps than a hypothetical batched forward would.
+        """
+        prefix_len = 30
+        response_len = 15
+        vocab_size = 100352
+
+        shared_prefix = torch.randint(1, vocab_size, (1, prefix_len)).cuda()
+        chosen_response = torch.randint(1, vocab_size, (1, response_len)).cuda()
+        rejected_response = torch.randint(1, vocab_size, (1, response_len)).cuda()
+
+        chosen_ids = torch.cat([shared_prefix, chosen_response], dim=1)
+        rejected_ids = torch.cat([shared_prefix, rejected_response], dim=1)
+
+        chosen_labels = torch.cat([torch.full((1, prefix_len), -100, device="cuda"), chosen_response], dim=1)
+        rejected_labels = torch.cat([torch.full((1, prefix_len), -100, device="cuda"), rejected_response], dim=1)
+
+        batch = {
+            "chosen_input_ids": chosen_ids,
+            "chosen_labels": chosen_labels,
+            "chosen_attention_mask": torch.ones_like(chosen_ids),
+            "rejected_input_ids": rejected_ids,
+            "rejected_labels": rejected_labels,
+            "rejected_attention_mask": torch.ones_like(rejected_ids),
+        }
+
+        with torch.no_grad():
+            packed_chosen, packed_rejected, _ = dpo_utils.concatenated_forward_olmo(self.model, batch)
+
+            concatenated_batch = dpo_utils.concatenated_inputs(batch)
+            input_ids = concatenated_batch["concatenated_input_ids"]
+            labels = concatenated_batch["concatenated_labels"]
+            batched_logits = self.model(input_ids)
+            batched_all_logps = dpo_utils._get_batch_logps(batched_logits, labels)
+            batched_chosen = batched_all_logps[:1]
+            batched_rejected = batched_all_logps[1:]
+
+        chosen_diff = (packed_chosen - batched_chosen).abs().item()
+        rejected_diff = (packed_rejected - batched_rejected).abs().item()
+
+        logger.info(f"Packed chosen logps: {packed_chosen.tolist()}")
+        logger.info(f"Batched chosen logps: {batched_chosen.tolist()}")
+        logger.info(f"Chosen logps difference: {chosen_diff}")
+
+        logger.info(f"Packed rejected logps: {packed_rejected.tolist()}")
+        logger.info(f"Batched rejected logps: {batched_rejected.tolist()}")
+        logger.info(f"Rejected logps difference: {rejected_diff}")
+
+        self.assertGreater(
+            chosen_diff,
+            0.01,
+            f"Expected numerical difference between packed and batched forward, but got {chosen_diff}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

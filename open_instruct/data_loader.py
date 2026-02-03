@@ -220,13 +220,13 @@ class HFDataLoader(data_loader.DataLoaderBase):
         """Reshard the dataset for a given epoch.
 
         Uses index-based shuffling to avoid copying the dataset.
-        Uses global PyTorch RNG to match HuggingFace DataLoader shuffle behavior.
+        Uses a local Generator with seed + epoch to match accelerate's SeedableRandomSampler.
         """
         dataset_len = len(self._full_dataset)
         if self._shuffle:
-            if epoch == 0:
-                torch.manual_seed(self.seed)
-            all_indices = torch.randperm(dataset_len).numpy()
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + epoch)
+            all_indices = torch.randperm(dataset_len, generator=generator).numpy()
         else:
             all_indices = np.arange(dataset_len)
         logger.info(

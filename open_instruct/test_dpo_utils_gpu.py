@@ -6,6 +6,7 @@ To run:
     ./scripts/train/build_image_and_launch.sh scripts/test/run_gpu_pytest.sh
 """
 
+import logging
 import pathlib
 import tempfile
 import unittest
@@ -15,6 +16,8 @@ from olmo_core.nn.transformer import TransformerConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from open_instruct import dpo_utils, model_utils
+
+logger = logging.getLogger(__name__)
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
@@ -213,6 +216,52 @@ class TestConcatenatedVsSeparateForwardOlmo(unittest.TestCase):
             torch.allclose(concat_rejected, sep_rejected, atol=1e-4),
             f"Rejected logps differ: concat={concat_rejected.tolist()}, sep={sep_rejected.tolist()}",
         )
+
+    def test_raw_logits_packed_vs_separate(self):
+        """Test raw OLMo-core model logits: packed with doc_lens vs separate forward passes."""
+        seq_len = 10
+        seq = torch.randint(1, 100352, (1, seq_len)).cuda()
+
+        packed = torch.cat([seq, seq], dim=1)
+        doc_lens = torch.tensor([seq_len, seq_len], device="cuda")
+
+        with torch.no_grad():
+            logits_packed = self.model(packed, doc_lens=doc_lens, max_doc_lens=[seq_len])
+            logits_separate = self.model(seq)
+
+        pos0_packed_doc1 = logits_packed[0, 0, :5].tolist()
+        pos0_packed_doc2 = logits_packed[0, seq_len, :5].tolist()
+        pos0_separate = logits_separate[0, 0, :5].tolist()
+
+        pos1_packed_doc1 = logits_packed[0, 1, :5].tolist()
+        pos1_packed_doc2 = logits_packed[0, seq_len + 1, :5].tolist()
+        pos1_separate = logits_separate[0, 1, :5].tolist()
+
+        logger.info(f"pos0 packed doc1: {pos0_packed_doc1}")
+        logger.info(f"pos0 packed doc2: {pos0_packed_doc2}")
+        logger.info(f"pos0 separate:    {pos0_separate}")
+        logger.info(f"pos1 packed doc1: {pos1_packed_doc1}")
+        logger.info(f"pos1 packed doc2: {pos1_packed_doc2}")
+        logger.info(f"pos1 separate:    {pos1_separate}")
+
+        pos0_doc1_matches_sep = torch.allclose(logits_packed[0, 0, :], logits_separate[0, 0, :], atol=1e-3, rtol=1e-3)
+        pos0_doc2_matches_sep = torch.allclose(
+            logits_packed[0, seq_len, :], logits_separate[0, 0, :], atol=1e-3, rtol=1e-3
+        )
+        pos1_doc1_matches_sep = torch.allclose(logits_packed[0, 1, :], logits_separate[0, 1, :], atol=1e-3, rtol=1e-3)
+        pos1_doc2_matches_sep = torch.allclose(
+            logits_packed[0, seq_len + 1, :], logits_separate[0, 1, :], atol=1e-3, rtol=1e-3
+        )
+
+        logger.info(f"pos0 doc1 matches separate: {pos0_doc1_matches_sep}")
+        logger.info(f"pos0 doc2 matches separate: {pos0_doc2_matches_sep}")
+        logger.info(f"pos1 doc1 matches separate: {pos1_doc1_matches_sep}")
+        logger.info(f"pos1 doc2 matches separate: {pos1_doc2_matches_sep}")
+
+        self.assertTrue(pos0_doc1_matches_sep, "pos0 doc1 should match separate")
+        self.assertTrue(pos0_doc2_matches_sep, "pos0 doc2 should match separate (doc_lens should reset RoPE)")
+        self.assertTrue(pos1_doc1_matches_sep, "pos1 doc1 should match separate")
+        self.assertTrue(pos1_doc2_matches_sep, "pos1 doc2 should match separate (doc_lens should reset RoPE)")
 
 
 if __name__ == "__main__":

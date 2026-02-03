@@ -1123,16 +1123,17 @@ def concatenated_forward_olmo(
     del output_router_logits
     bs = batch["chosen_input_ids"].shape[0]
 
-    embed_weight: torch.Tensor = model.embeddings.weight  # type: ignore[assignment,union-attr]
-    full_embed = embed_weight.full_tensor() if hasattr(embed_weight, "full_tensor") else embed_weight  # type: ignore[call-non-callable]
-    embed_sample = full_embed[0, :5].detach().float().cpu()
-    embed_mean = full_embed.detach().float().mean().cpu()
-    logger.info(
-        f"DEBUG [OLMo forward] "
-        f"embed_weight.shape={embed_weight.shape} "
-        f"embed_weight[0,:5]={embed_sample.tolist()} "
-        f"embed_weight.mean()={float(embed_mean):.6f}"
-    )
+    if hasattr(model, "embeddings"):
+        embed_weight: torch.Tensor = model.embeddings.weight  # type: ignore[assignment,union-attr]
+        full_embed = embed_weight.full_tensor() if hasattr(embed_weight, "full_tensor") else embed_weight  # type: ignore[call-non-callable]
+        embed_sample = full_embed[0, :5].detach().float().cpu()
+        embed_mean = full_embed.detach().float().mean().cpu()
+        logger.info(
+            f"DEBUG [OLMo forward] "
+            f"embed_weight.shape={embed_weight.shape} "
+            f"embed_weight[0,:5]={embed_sample.tolist()} "
+            f"embed_weight.mean()={float(embed_mean):.6f}"
+        )
 
     if not packing:
         concatenated_batch = concatenated_inputs(batch)

@@ -5,6 +5,8 @@ This script identifies where numerical differences originate between the two
 implementations by comparing outputs at each layer.
 """
 
+import argparse
+
 import torch
 import transformers
 from olmo_core.nn.hf.convert import convert_state_from_hf
@@ -13,22 +15,30 @@ from open_instruct.olmo_core_utils import get_transformer_config
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--attn-backend", type=str, default="flash_2", choices=["flash_2", "sdpa"])
+    args = parser.parse_args()
+
     model_name = "allenai/OLMo-2-0425-1B"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    hf_attn_impl = "flash_attention_2" if args.attn_backend == "flash_2" else "sdpa"
+    olmo_attn_backend = args.attn_backend
+
     print(f"Loading models on {device}...")
+    print(f"Using attention backend: HF={hf_attn_impl}, OLMo={olmo_attn_backend}")
 
     # Load HuggingFace model
     hf_model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
+        attn_implementation=hf_attn_impl,
     ).to(device)
     hf_model.eval()
 
     # Load OLMo-core model
     hf_config = transformers.AutoConfig.from_pretrained(model_name)
-    olmo_config = get_transformer_config(model_name, hf_config.vocab_size, attn_backend="flash_2")
+    olmo_config = get_transformer_config(model_name, hf_config.vocab_size, attn_backend=olmo_attn_backend)
     olmo_model = olmo_config.build(init_device="cpu")
 
     # Convert and load weights

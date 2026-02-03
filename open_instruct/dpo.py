@@ -468,7 +468,7 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
         model = _apply_parallelism(
             model, device, args.tensor_parallel_degree, args.context_parallel_degree, args.pipeline_parallel_degree
         )
-    data_loader.reshuffle(epoch=0)
+    data_loader.reshuffle(epoch=1)
 
     first_batch_indices = [data_loader.dataset[i]["index"] for i in range(min(10, len(data_loader.dataset)))]
     logger.info(f"DEBUG [dpo.py] First 10 dataset indices after reshuffle: {first_batch_indices}")

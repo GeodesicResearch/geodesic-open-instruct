@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Verify that CPU RoPE warmup fixes the layer 8 divergence between HF and OLMo-core.
+"""Verify that patching inv_freq fixes the layer divergence between HF and OLMo-core.
 
-Tests two scenarios:
-1. WITHOUT warmup: OLMo-core computes inv_freq on GPU -> divergence at layer 8
-2. WITH warmup: OLMo-core uses CPU-computed inv_freq -> all layers match
+Tests three scenarios:
+1. NO FIX: OLMo-core computes inv_freq on GPU -> divergence at layer 8
+2. PATCH: compute_inv_freqs patched to compute on CPU then move to GPU -> all layers match
 """
 
 import logging
@@ -11,6 +11,7 @@ import logging
 import torch
 import transformers
 from olmo_core.nn.hf.convert import convert_state_from_hf
+from olmo_core.nn import rope as rope_module
 
 from open_instruct import logger_utils
 from open_instruct import olmo_core_utils
@@ -18,8 +19,13 @@ from open_instruct import olmo_core_utils
 logger = logger_utils.setup_logger(__name__)
 
 
-def compare_forward_passes(model_name: str, use_cpu_warmup: bool):
+def compare_forward_passes(model_name: str, patch_inv_freq: bool):
     device = torch.device("cuda")
+
+    original_fn = rope_module.compute_inv_freqs
+
+    if patch_inv_freq:
+        olmo_core_utils.patch_rope_for_hf_compatibility()
 
     hf_model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=torch.bfloat16,
@@ -31,9 +37,6 @@ def compare_forward_passes(model_name: str, use_cpu_warmup: bool):
         model_name, hf_config.vocab_size, attn_backend="torch"
     )
     olmo_model = olmo_config.build(init_device="cpu")
-
-    if use_cpu_warmup:
-        olmo_core_utils.warmup_rope_cache_on_cpu(olmo_model, max_seq_len=8192)
 
     hf_state = hf_model.state_dict()
     converted_state = convert_state_from_hf(hf_config, hf_state, model_type="olmo2")
@@ -76,6 +79,8 @@ def compare_forward_passes(model_name: str, use_cpu_warmup: bool):
         if max_diff > 0 and first_diff_layer is None:
             first_diff_layer = i
 
+    rope_module.compute_inv_freqs = original_fn
+
     return first_diff_layer
 
 
@@ -86,9 +91,8 @@ def test_inv_freq_cpu_vs_gpu():
     theta = int(hf_config.rope_theta)
     head_dim = hf_config.hidden_size // hf_config.num_attention_heads
 
-    from olmo_core.nn.rope import compute_inv_freqs
-    inv_freq_cpu = compute_inv_freqs(theta, head_dim, torch.device("cpu"))
-    inv_freq_gpu = compute_inv_freqs(theta, head_dim, device)
+    inv_freq_cpu = rope_module.compute_inv_freqs(theta, head_dim, torch.device("cpu"))
+    inv_freq_gpu = rope_module.compute_inv_freqs(theta, head_dim, device)
 
     diff = (inv_freq_cpu - inv_freq_gpu.cpu()).abs()
     logger.info(f"inv_freq CPU vs GPU: max_diff={diff.max().item():.10e}, "
@@ -117,30 +121,30 @@ def main():
     test_inv_freq_cpu_vs_gpu()
 
     logger.info("\n" + "=" * 60)
-    logger.info("PART 2: Forward pass WITHOUT CPU warmup (expect divergence)")
+    logger.info("PART 2: Forward pass WITHOUT patch (expect divergence)")
     logger.info("=" * 60)
-    first_diff_no_warmup = compare_forward_passes(model_name, use_cpu_warmup=False)
-    logger.info(f"First divergent layer WITHOUT warmup: {first_diff_no_warmup}")
+    first_diff_no_patch = compare_forward_passes(model_name, patch_inv_freq=False)
+    logger.info(f"First divergent layer WITHOUT patch: {first_diff_no_patch}")
 
     logger.info("\n" + "=" * 60)
-    logger.info("PART 3: Forward pass WITH CPU warmup (expect all match)")
+    logger.info("PART 3: Forward pass WITH inv_freq patch (expect all match)")
     logger.info("=" * 60)
-    first_diff_with_warmup = compare_forward_passes(model_name, use_cpu_warmup=True)
-    logger.info(f"First divergent layer WITH warmup: {first_diff_with_warmup}")
+    first_diff_with_patch = compare_forward_passes(model_name, patch_inv_freq=True)
+    logger.info(f"First divergent layer WITH patch: {first_diff_with_patch}")
 
     logger.info("\n" + "=" * 60)
     logger.info("SUMMARY")
     logger.info("=" * 60)
-    if first_diff_no_warmup is not None and first_diff_with_warmup is None:
-        logger.info("SUCCESS: CPU warmup fixes the divergence!")
-        logger.info(f"  Without warmup: diverges at layer {first_diff_no_warmup}")
-        logger.info(f"  With warmup: all layers match")
-    elif first_diff_with_warmup is not None:
-        logger.info(f"PARTIAL: Warmup improved but didn't fully fix (diverges at layer {first_diff_with_warmup})")
-    elif first_diff_no_warmup is None:
-        logger.info("UNEXPECTED: No divergence even without warmup (CPU and GPU inv_freq may be identical on this hardware)")
+    if first_diff_no_patch is not None and first_diff_with_patch is None:
+        logger.info("SUCCESS: inv_freq patch fixes the divergence!")
+        logger.info(f"  Without patch: diverges at layer {first_diff_no_patch}")
+        logger.info("  With patch: all layers match")
+    elif first_diff_with_patch is not None:
+        logger.info(f"PARTIAL: Patch helped but didn't fully fix (diverges at layer {first_diff_with_patch})")
+    elif first_diff_no_patch is None:
+        logger.info("UNEXPECTED: No divergence even without patch")
     else:
-        logger.info("FAILURE: Warmup did not help")
+        logger.info("FAILURE: Patch did not help")
 
 
 if __name__ == "__main__":

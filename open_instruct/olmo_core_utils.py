@@ -9,6 +9,7 @@ import torch
 import transformers
 from olmo_core.nn.attention import AttentionBackendName
 from olmo_core.nn.hf.checkpoint import save_hf_model
+from olmo_core.nn.rope import compute_inv_freqs as _original_compute_inv_freqs
 from olmo_core.nn.transformer import TransformerConfig
 
 from open_instruct import logger_utils
@@ -67,19 +68,26 @@ def get_transformer_config(
     return getattr(TransformerConfig, config_name)(**kwargs)
 
 
-def warmup_rope_cache_on_cpu(model, max_seq_len: int = 8192):
-    """Pre-compute RoPE embeddings on CPU to match HuggingFace's computation.
+def patch_rope_for_hf_compatibility():
+    """Patch OLMo-core's inv_freq computation to match HuggingFace.
 
-    HF computes inv_freq on CPU during model __init__, while OLMo-core computes
-    it on whatever device the model is on. The exponentiation theta^(x/dim)
-    can produce slightly different float32 results on CPU vs GPU, causing
-    small numerical differences that compound through transformer layers.
+    HF computes inv_freq on CPU during model __init__, then moves the
+    values to GPU. OLMo-core computes inv_freq directly on GPU. The
+    exponentiation theta^(x/dim) produces slightly different float32
+    results on CPU vs GPU, causing numerical differences that compound
+    through transformer layers.
 
-    Call this after building the model on CPU but before moving it to GPU.
-    The cached values will be moved to GPU on demand during forward passes.
+    This patches compute_inv_freqs to always compute on CPU first, then
+    move to the target device, matching HF's behavior.
     """
-    model.get_rope_buffers(max_seq_len, torch.device("cpu"))
-    logger.info(f"Pre-computed RoPE cache on CPU for max_seq_len={max_seq_len}")
+    import olmo_core.nn.rope as rope_module  # noqa: PLC0415
+
+    def _compute_inv_freqs_on_cpu(theta, dim, device):
+        inv_freq = _original_compute_inv_freqs(theta, dim, torch.device("cpu"))
+        return inv_freq.to(device)
+
+    rope_module.compute_inv_freqs = _compute_inv_freqs_on_cpu
+    logger.info("Patched OLMo-core compute_inv_freqs to compute on CPU for HF compatibility")
 
 
 def save_state_dict_as_hf(model_config, state_dict, save_dir, original_model_name_or_path, tokenizer):

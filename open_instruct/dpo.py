@@ -106,8 +106,8 @@ def _setup_model(args: dpo_utils.ExperimentConfig, device: torch.device):
     model_config = olmo_core_utils.get_transformer_config(
         config_name_for_lookup, vocab_size, attn_backend=attn_backend
     )
+    olmo_core_utils.patch_rope_for_hf_compatibility()
     model = model_config.build(init_device="cpu")
-    olmo_core_utils.warmup_rope_cache_on_cpu(model, max_seq_len=args.max_seq_length)
 
     logger.info(f"Loading HuggingFace weights from {args.model_name_or_path} in bfloat16")
     hf_model = transformers.AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=torch.bfloat16)

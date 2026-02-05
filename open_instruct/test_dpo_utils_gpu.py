@@ -14,10 +14,11 @@ import unittest
 import torch
 from olmo_core.nn.attention import AttentionConfig
 from olmo_core.nn.attention.backend import has_flash_attn_2
+from olmo_core.nn.hf import convert as olmo_hf_convert
 from olmo_core.nn.transformer import TransformerConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from open_instruct import dpo_utils, model_utils
+from open_instruct import dpo_utils, model_utils, olmo_core_utils
 
 logger = logging.getLogger(__name__)
 
@@ -475,6 +476,245 @@ class TestConcatenatedVsSeparateForwardHF(unittest.TestCase):
         self.assertTrue(
             torch.allclose(concat_rejected, sep_rejected, atol=1e-4),
             f"Rejected logps differ: concat={concat_rejected.tolist()}, sep={sep_rejected.tolist()}",
+        )
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+@unittest.skipUnless(has_flash_attn_2(), "Flash attention required")
+class TestOlmoCoreVsHFGradientDivergence(unittest.TestCase):
+    """Verify hypothesis 1: OLMo-core and HF model implementations produce different gradients.
+
+    Even with identical weights and inputs, the different model implementations
+    (different attention code paths, different autograd graphs) produce different
+    gradients, causing training divergence after the first optimizer step.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        hf_config = AutoConfig.from_pretrained("allenai/OLMo-2-0425-1B")
+        hf_config.num_hidden_layers = 2
+        hf_config._attn_implementation = "flash_attention_2"
+        cls.hf_model = AutoModelForCausalLM.from_config(hf_config).to(torch.bfloat16).cuda()
+        cls.vocab_size = hf_config.vocab_size
+
+        olmo_config = olmo_core_utils.get_transformer_config(
+            "allenai/OLMo-2-0425-1B", hf_config.vocab_size, attn_backend="flash_2"
+        )
+        olmo_config.n_layers = 2
+        olmo_core_utils.patch_rope_for_hf_compatibility()
+        cls.olmo_model = olmo_config.build(init_device="cpu").to(torch.bfloat16).cuda()
+
+        hf_state = cls.hf_model.state_dict()
+        converted = olmo_hf_convert.convert_state_from_hf(
+            hf_config, hf_state, model_type=getattr(hf_config, "model_type", None)
+        )
+        converted_gpu = {k: v.to(device="cuda") for k, v in converted.items()}
+        cls.olmo_model.load_state_dict(converted_gpu, assign=True, strict=False)
+
+        hf_params = sum(p.numel() for p in cls.hf_model.parameters())
+        olmo_params = sum(p.numel() for p in cls.olmo_model.parameters())
+        logger.info(f"HF model params: {hf_params}, OLMo-core params: {olmo_params}")
+
+    def _make_batch(self):
+        prefix_len = 50
+        response_len = 20
+        shared_prefix = torch.randint(1, self.vocab_size, (1, prefix_len)).cuda()
+        chosen_response = torch.randint(1, self.vocab_size, (1, response_len)).cuda()
+        rejected_response = torch.randint(1, self.vocab_size, (1, response_len)).cuda()
+
+        chosen_ids = torch.cat([shared_prefix, chosen_response], dim=1)
+        rejected_ids = torch.cat([shared_prefix, rejected_response], dim=1)
+
+        chosen_labels = torch.cat([torch.full((1, prefix_len), -100, device="cuda"), chosen_response], dim=1)
+        rejected_labels = torch.cat([torch.full((1, prefix_len), -100, device="cuda"), rejected_response], dim=1)
+
+        return {
+            "chosen_input_ids": chosen_ids,
+            "chosen_labels": chosen_labels,
+            "chosen_attention_mask": torch.ones_like(chosen_ids),
+            "rejected_input_ids": rejected_ids,
+            "rejected_labels": rejected_labels,
+            "rejected_attention_mask": torch.ones_like(rejected_ids),
+        }
+
+    def test_forward_close_but_gradients_differ(self):
+        torch.manual_seed(42)
+        batch = self._make_batch()
+
+        self.hf_model.zero_grad()
+        hf_chosen, hf_rejected, _ = dpo_utils.separate_forward(self.hf_model, batch)
+        hf_loss = -(hf_chosen - hf_rejected).sigmoid().log().mean()
+        hf_loss.backward()
+        hf_grad_norm = (
+            sum(p.grad.float().norm().item() ** 2 for p in self.hf_model.parameters() if p.grad is not None) ** 0.5
+        )
+
+        self.olmo_model.zero_grad()
+        olmo_chosen, olmo_rejected, _ = dpo_utils.separate_forward_olmo(self.olmo_model, batch)
+        olmo_loss = -(olmo_chosen - olmo_rejected).sigmoid().log().mean()
+        olmo_loss.backward()
+        olmo_grad_norm = (
+            sum(p.grad.float().norm().item() ** 2 for p in self.olmo_model.parameters() if p.grad is not None) ** 0.5
+        )
+
+        logps_diff = (hf_chosen - olmo_chosen).abs().max().item()
+        loss_diff = (hf_loss - olmo_loss).abs().item()
+        grad_norm_diff = abs(hf_grad_norm - olmo_grad_norm)
+        grad_norm_rel = grad_norm_diff / max(hf_grad_norm, olmo_grad_norm)
+
+        logger.info(f"Logps max diff: {logps_diff}")
+        logger.info(f"Loss diff: {loss_diff}")
+        logger.info(f"HF grad norm: {hf_grad_norm:.6f}")
+        logger.info(f"OLMo grad norm: {olmo_grad_norm:.6f}")
+        logger.info(f"Grad norm abs diff: {grad_norm_diff:.6f}")
+        logger.info(f"Grad norm rel diff: {grad_norm_rel:.6f}")
+
+        self.assertNotAlmostEqual(
+            hf_grad_norm,
+            olmo_grad_norm,
+            places=4,
+            msg="Expected gradient norms to differ between OLMo-core and HF models",
+        )
+
+    def test_divergence_increases_after_optimizer_step(self):
+        torch.manual_seed(42)
+        batch = self._make_batch()
+
+        hf_state = {k: v.clone() for k, v in self.hf_model.state_dict().items()}
+        olmo_state = {k: v.clone() for k, v in self.olmo_model.state_dict().items()}
+
+        self.hf_model.zero_grad()
+        self.olmo_model.zero_grad()
+
+        with torch.no_grad():
+            hf_chosen0, _, _ = dpo_utils.separate_forward(self.hf_model, batch)
+            olmo_chosen0, _, _ = dpo_utils.separate_forward_olmo(self.olmo_model, batch)
+        initial_diff = (hf_chosen0 - olmo_chosen0).abs().item()
+
+        hf_opt = torch.optim.SGD(self.hf_model.parameters(), lr=1e-3)
+        olmo_opt = torch.optim.SGD(self.olmo_model.parameters(), lr=1e-3)
+
+        self.hf_model.zero_grad()
+        hf_chosen, hf_rejected, _ = dpo_utils.separate_forward(self.hf_model, batch)
+        (-(hf_chosen - hf_rejected).sigmoid().log().mean()).backward()
+        hf_opt.step()
+
+        self.olmo_model.zero_grad()
+        olmo_chosen, olmo_rejected, _ = dpo_utils.separate_forward_olmo(self.olmo_model, batch)
+        (-(olmo_chosen - olmo_rejected).sigmoid().log().mean()).backward()
+        olmo_opt.step()
+
+        with torch.no_grad():
+            hf_chosen1, _, _ = dpo_utils.separate_forward(self.hf_model, batch)
+            olmo_chosen1, _, _ = dpo_utils.separate_forward_olmo(self.olmo_model, batch)
+        post_step_diff = (hf_chosen1 - olmo_chosen1).abs().item()
+
+        logger.info(f"Initial logps diff: {initial_diff:.6f}")
+        logger.info(f"Post-step logps diff: {post_step_diff:.6f}")
+        logger.info(f"Divergence ratio: {post_step_diff / max(initial_diff, 1e-10):.2f}x")
+
+        self.hf_model.load_state_dict(hf_state)
+        self.olmo_model.load_state_dict(olmo_state)
+
+        self.assertGreater(
+            post_step_diff,
+            initial_diff,
+            f"Expected logps to diverge more after optimizer step "
+            f"(initial={initial_diff:.6f}, post_step={post_step_diff:.6f})",
+        )
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+@unittest.skipUnless(has_flash_attn_2(), "Flash attention required")
+class TestFlashAttnVarlenVsStandardGradients(unittest.TestCase):
+    """Verify hypothesis 2: flash_attn_func and flash_attn_varlen_func differ in backward pass.
+
+    These are different CUDA kernels. Even for identical inputs and forward outputs,
+    the backward pass may tile and accumulate differently, producing different gradients.
+    """
+
+    def test_single_sequence_gradients(self):
+        import flash_attn  # noqa: PLC0415
+
+        torch.manual_seed(42)
+        seq_len, nheads, headdim = 64, 16, 128
+
+        q_data = torch.randn(1, seq_len, nheads, headdim, device="cuda", dtype=torch.bfloat16)
+        k_data = torch.randn(1, seq_len, nheads, headdim, device="cuda", dtype=torch.bfloat16)
+        v_data = torch.randn(1, seq_len, nheads, headdim, device="cuda", dtype=torch.bfloat16)
+
+        q1 = q_data.clone().requires_grad_(True)
+        k1 = k_data.clone().requires_grad_(True)
+        v1 = v_data.clone().requires_grad_(True)
+        out1 = flash_attn.flash_attn_func(q1, k1, v1, causal=True)
+        out1.sum().backward()
+
+        q2 = q_data.squeeze(0).clone().requires_grad_(True)
+        k2 = k_data.squeeze(0).clone().requires_grad_(True)
+        v2 = v_data.squeeze(0).clone().requires_grad_(True)
+        cu = torch.tensor([0, seq_len], device="cuda", dtype=torch.int32)
+        out2 = flash_attn.flash_attn_varlen_func(q2, k2, v2, cu, cu, seq_len, seq_len, causal=True)
+        out2.sum().backward()
+
+        forward_diff = (out1.squeeze(0) - out2).abs().max().item()
+        q_grad_diff = (q1.grad.squeeze(0) - q2.grad).abs().max().item()
+        k_grad_diff = (k1.grad.squeeze(0) - k2.grad).abs().max().item()
+        v_grad_diff = (v1.grad.squeeze(0) - v2.grad).abs().max().item()
+        max_grad_diff = max(q_grad_diff, k_grad_diff, v_grad_diff)
+
+        logger.info(f"Single-seq forward max diff: {forward_diff}")
+        logger.info(f"Single-seq Q grad max diff: {q_grad_diff}")
+        logger.info(f"Single-seq K grad max diff: {k_grad_diff}")
+        logger.info(f"Single-seq V grad max diff: {v_grad_diff}")
+        logger.info(f"Single-seq max gradient diff: {max_grad_diff}")
+
+        self.assertGreater(
+            max_grad_diff,
+            0.0,
+            "Expected gradient differences between flash_attn_func and flash_attn_varlen_func. "
+            "If this fails, hypothesis 2 (different FA kernels cause gradient divergence) is wrong.",
+        )
+
+    def test_multiple_sequences_gradients(self):
+        import flash_attn  # noqa: PLC0415
+
+        torch.manual_seed(42)
+        batch_size, seq_len, nheads, headdim = 2, 64, 16, 128
+
+        q_data = torch.randn(batch_size, seq_len, nheads, headdim, device="cuda", dtype=torch.bfloat16)
+        k_data = torch.randn(batch_size, seq_len, nheads, headdim, device="cuda", dtype=torch.bfloat16)
+        v_data = torch.randn(batch_size, seq_len, nheads, headdim, device="cuda", dtype=torch.bfloat16)
+
+        q1 = q_data.clone().requires_grad_(True)
+        k1 = k_data.clone().requires_grad_(True)
+        v1 = v_data.clone().requires_grad_(True)
+        out1 = flash_attn.flash_attn_func(q1, k1, v1, causal=True)
+        out1.sum().backward()
+
+        q2 = q_data.reshape(-1, nheads, headdim).clone().requires_grad_(True)
+        k2 = k_data.reshape(-1, nheads, headdim).clone().requires_grad_(True)
+        v2 = v_data.reshape(-1, nheads, headdim).clone().requires_grad_(True)
+        cu = torch.tensor([0, seq_len, 2 * seq_len], device="cuda", dtype=torch.int32)
+        out2 = flash_attn.flash_attn_varlen_func(q2, k2, v2, cu, cu, seq_len, seq_len, causal=True)
+        out2.sum().backward()
+
+        forward_diff = (out1.reshape(-1, nheads, headdim) - out2).abs().max().item()
+        q_grad_diff = (q1.grad.reshape(-1, nheads, headdim) - q2.grad).abs().max().item()
+        k_grad_diff = (k1.grad.reshape(-1, nheads, headdim) - k2.grad).abs().max().item()
+        v_grad_diff = (v1.grad.reshape(-1, nheads, headdim) - v2.grad).abs().max().item()
+        max_grad_diff = max(q_grad_diff, k_grad_diff, v_grad_diff)
+
+        logger.info(f"Multi-seq forward max diff: {forward_diff}")
+        logger.info(f"Multi-seq Q grad max diff: {q_grad_diff}")
+        logger.info(f"Multi-seq K grad max diff: {k_grad_diff}")
+        logger.info(f"Multi-seq V grad max diff: {v_grad_diff}")
+        logger.info(f"Multi-seq max gradient diff: {max_grad_diff}")
+
+        self.assertGreater(
+            max_grad_diff,
+            0.0,
+            "Expected gradient differences between flash_attn_func and flash_attn_varlen_func "
+            "for multiple sequences. If this fails, hypothesis 2 is wrong.",
         )
 
 

@@ -773,6 +773,208 @@ class TestRoPEPatchEffect(unittest.TestCase):
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 @unittest.skipUnless(has_flash_attn_2(), "Flash attention required")
+class TestAttentionLayerEquivalence(unittest.TestCase):
+    """Pinpoint whether the attention layer, norm, or MLP causes OLMo-core vs HF divergence.
+
+    Compares layer-by-layer activations and per-module gradients between OLMo-core
+    and HF models loaded with identical weights, using the same input.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        hf_config = AutoConfig.from_pretrained("allenai/OLMo-2-0425-1B")
+        hf_config.num_hidden_layers = 2
+        hf_config._attn_implementation = "flash_attention_2"
+        cls.hf_model = AutoModelForCausalLM.from_config(hf_config).to(torch.bfloat16).cuda()
+        cls.vocab_size = hf_config.vocab_size
+
+        olmo_config = olmo_core_utils.get_transformer_config(
+            "allenai/OLMo-2-0425-1B", hf_config.vocab_size, attn_backend="flash_2"
+        )
+        olmo_config.n_layers = 2
+        olmo_core_utils.patch_rope_for_hf_compatibility()
+        cls.olmo_model = olmo_config.build(init_device="cpu").to(torch.bfloat16).cuda()
+
+        hf_state = cls.hf_model.state_dict()
+        converted = olmo_hf_convert.convert_state_from_hf(
+            hf_config, hf_state, model_type=getattr(hf_config, "model_type", None)
+        )
+        converted_gpu = {k: v.to(device="cuda") for k, v in converted.items()}
+        cls.olmo_model.load_state_dict(converted_gpu, assign=True, strict=False)
+
+    @staticmethod
+    def _make_output_hook(storage, key):
+        def hook(module, args, output):
+            if isinstance(output, tuple):
+                storage[key] = output[0].detach().clone()
+            else:
+                storage[key] = output.detach().clone()
+
+        return hook
+
+    @staticmethod
+    def _diff(a, b):
+        af = a.float()
+        bf = b.float()
+        return (af - bf).abs().max().item(), (af - bf).abs().mean().item()
+
+    def test_layer_by_layer_forward_comparison(self):
+        """Compare activations at each sub-module to find where divergence starts."""
+        torch.manual_seed(42)
+        input_ids = torch.randint(1, self.vocab_size, (1, 70)).cuda()
+
+        hf_acts = {}
+        olmo_acts = {}
+        hooks = []
+
+        hooks.append(self.hf_model.model.embed_tokens.register_forward_hook(self._make_output_hook(hf_acts, "embed")))
+        for i in range(2):
+            layer = self.hf_model.model.layers[i]
+            hooks.append(layer.self_attn.register_forward_hook(self._make_output_hook(hf_acts, f"L{i}_attn")))
+            hooks.append(
+                layer.post_attention_layernorm.register_forward_hook(
+                    self._make_output_hook(hf_acts, f"L{i}_attn_norm")
+                )
+            )
+            hooks.append(layer.mlp.register_forward_hook(self._make_output_hook(hf_acts, f"L{i}_mlp")))
+            hooks.append(
+                layer.post_feedforward_layernorm.register_forward_hook(
+                    self._make_output_hook(hf_acts, f"L{i}_ff_norm")
+                )
+            )
+            hooks.append(layer.register_forward_hook(self._make_output_hook(hf_acts, f"L{i}_block")))
+
+        hooks.append(self.olmo_model.embeddings.register_forward_hook(self._make_output_hook(olmo_acts, "embed")))
+        for i in range(2):
+            block = self.olmo_model.blocks[i]
+            hooks.append(block.attention.register_forward_hook(self._make_output_hook(olmo_acts, f"L{i}_attn")))
+            hooks.append(
+                block.attention_norm.register_forward_hook(self._make_output_hook(olmo_acts, f"L{i}_attn_norm"))
+            )
+            hooks.append(block.feed_forward.register_forward_hook(self._make_output_hook(olmo_acts, f"L{i}_mlp")))
+            hooks.append(
+                block.feed_forward_norm.register_forward_hook(self._make_output_hook(olmo_acts, f"L{i}_ff_norm"))
+            )
+            hooks.append(block.register_forward_hook(self._make_output_hook(olmo_acts, f"L{i}_block")))
+
+        with torch.no_grad():
+            hf_logits = self.hf_model(input_ids=input_ids, attention_mask=torch.ones_like(input_ids)).logits
+            olmo_logits = self.olmo_model(input_ids)
+
+        for h in hooks:
+            h.remove()
+
+        keys = ["embed"]
+        for i in range(2):
+            keys.extend([f"L{i}_attn", f"L{i}_attn_norm", f"L{i}_mlp", f"L{i}_ff_norm", f"L{i}_block"])
+
+        logger.info("=== Layer-by-Layer Activation Comparison ===")
+        first_divergence = None
+        for key in keys:
+            hf_val = hf_acts.get(key)
+            olmo_val = olmo_acts.get(key)
+            if hf_val is None or olmo_val is None:
+                logger.info(f"{key}: MISSING (hf={hf_val is not None}, olmo={olmo_val is not None})")
+                continue
+            max_d, mean_d = self._diff(hf_val, olmo_val)
+            logger.info(f"{key}: max_diff={max_d:.10f}, mean_diff={mean_d:.10f}")
+            if first_divergence is None and max_d > 0:
+                first_divergence = key
+
+        logit_max, logit_mean = self._diff(hf_logits, olmo_logits)
+        logger.info(f"logits: max_diff={logit_max:.10f}, mean_diff={logit_mean:.10f}")
+        logger.info(f"First divergence at: {first_divergence}")
+
+        embed_max, _ = self._diff(hf_acts["embed"], olmo_acts["embed"])
+        self.assertEqual(embed_max, 0.0, "Embeddings should be bit-for-bit identical")
+
+        self.assertIsNotNone(first_divergence, "Expected some divergence between models")
+
+    def test_per_module_gradient_comparison(self):
+        """Compare gradient norms per module to find which component has largest gradient diff."""
+        torch.manual_seed(42)
+        input_ids = torch.randint(1, self.vocab_size, (1, 70)).cuda()
+        labels = input_ids.clone()
+        labels[:, :35] = -100
+
+        self.hf_model.zero_grad()
+        hf_out = self.hf_model(input_ids=input_ids, attention_mask=torch.ones_like(input_ids))
+        hf_logps = dpo_utils._get_batch_logps(hf_out.logits, labels)
+        hf_logps.sum().backward()
+
+        self.olmo_model.zero_grad()
+        olmo_logits = self.olmo_model(input_ids)
+        olmo_logps = dpo_utils._get_batch_logps(olmo_logits, labels)
+        olmo_logps.sum().backward()
+
+        hf_module_grads = {}
+        for i in range(2):
+            layer = self.hf_model.model.layers[i]
+            for name, submod in [
+                ("attn_q", layer.self_attn.q_proj),
+                ("attn_k", layer.self_attn.k_proj),
+                ("attn_v", layer.self_attn.v_proj),
+                ("attn_o", layer.self_attn.o_proj),
+                ("attn_qnorm", layer.self_attn.q_norm),
+                ("attn_knorm", layer.self_attn.k_norm),
+                ("post_attn_norm", layer.post_attention_layernorm),
+                ("mlp_gate", layer.mlp.gate_proj),
+                ("mlp_up", layer.mlp.up_proj),
+                ("mlp_down", layer.mlp.down_proj),
+                ("post_ff_norm", layer.post_feedforward_layernorm),
+            ]:
+                grad_norm = (
+                    sum(p.grad.float().norm().item() ** 2 for p in submod.parameters() if p.grad is not None) ** 0.5
+                )
+                hf_module_grads[f"L{i}_{name}"] = grad_norm
+
+        olmo_module_grads = {}
+        for i in range(2):
+            block = self.olmo_model.blocks[i]
+            for name, submod in [
+                ("attn_q", block.attention.w_q),
+                ("attn_k", block.attention.w_k),
+                ("attn_v", block.attention.w_v),
+                ("attn_o", block.attention.w_out),
+                ("attn_qnorm", block.attention.q_norm),
+                ("attn_knorm", block.attention.k_norm),
+                ("post_attn_norm", block.attention_norm),
+                ("mlp_gate", block.feed_forward.w1),
+                ("mlp_up", block.feed_forward.w3),
+                ("mlp_down", block.feed_forward.w2),
+                ("post_ff_norm", block.feed_forward_norm),
+            ]:
+                grad_norm = (
+                    sum(p.grad.float().norm().item() ** 2 for p in submod.parameters() if p.grad is not None) ** 0.5
+                )
+                olmo_module_grads[f"L{i}_{name}"] = grad_norm
+
+        logger.info("=== Per-Module Gradient Norm Comparison ===")
+        logger.info(f"{'Module':<25} {'HF':>12} {'OLMo':>12} {'Abs Diff':>12} {'Rel Diff':>12}")
+        logger.info("-" * 75)
+        max_rel_diff_key = None
+        max_rel_diff_val = 0.0
+        for key in sorted(hf_module_grads.keys()):
+            hf_g = hf_module_grads[key]
+            olmo_g = olmo_module_grads.get(key, 0.0)
+            abs_diff = abs(hf_g - olmo_g)
+            rel_diff = abs_diff / max(hf_g, olmo_g, 1e-10)
+            logger.info(f"{key:<25} {hf_g:>12.6f} {olmo_g:>12.6f} {abs_diff:>12.6f} {rel_diff:>12.6f}")
+            if rel_diff > max_rel_diff_val:
+                max_rel_diff_val = rel_diff
+                max_rel_diff_key = key
+
+        logger.info(f"Largest relative gradient diff: {max_rel_diff_key} ({max_rel_diff_val:.6f})")
+
+        total_hf = sum(hf_module_grads.values())
+        total_olmo = sum(olmo_module_grads.values())
+        self.assertNotAlmostEqual(
+            total_hf, total_olmo, places=2, msg="Expected gradient norms to differ between OLMo-core and HF"
+        )
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+@unittest.skipUnless(has_flash_attn_2(), "Flash attention required")
 class TestFlashAttnVarlenVsStandardGradients(unittest.TestCase):
     """Disproved hypothesis 2: flash_attn_func and flash_attn_varlen_func produce identical gradients.
 

@@ -95,6 +95,29 @@ hf_grad_norm = ...  # Different from olmo_grad_norm
 
 ---
 
+### Hypothesis 7: HF concatenated vs separate mismatch is due to train-mode dropout/RNG
+**Status: RULED OUT**
+
+We hypothesized that in train mode, dropout and RNG consumption differences between a single
+batch-size-2 forward and two batch-size-1 forwards were causing log-prob divergence.
+
+**Experiment:** In `TestConcatenatedVsSeparateForwardHF`, forced `model.train()`, set all
+Dropout modules to `p=0.0`, and snapshot/restore CPU+CUDA RNG state between
+`concatenated_forward` and `separate_forward`. Ran on Beaker via
+`scripts/test/run_gpu_pytest_dpo_concat.sh` (experiment `01KGRQRQTN134C8XTCZQ73HBXK`,
+2026-02-06).
+
+**Result:** Still fails in both cases:
+- Same-length: concat `-262.6362` vs sep `-262.6900` (abs diff ≈ `0.054`)
+- Different-length: concat `-883.0056` vs sep `-883.7837` (abs diff ≈ `0.778`)
+
+**Conclusion:** Divergence persists without dropout, so the mismatch is likely due to
+batch-shape-dependent numerics (batch size 2 vs 1), BF16 kernel nondeterminism, or subtle
+masking/attention differences. A deterministic fix likely requires equalizing shapes
+or using a single forward path for both.
+
+---
+
 ### Hypothesis 6: RoPE computation differs (CPU vs GPU)
 **Status: RULED OUT (no effect)**
 

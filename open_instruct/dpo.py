@@ -21,7 +21,7 @@ from olmo_core.nn.attention.backend import has_flash_attn_3
 from olmo_core.nn.hf.checkpoint import load_hf_model
 from olmo_core.optim import AdamWConfig, ConstantWithWarmup, CosWithWarmup, LinearWithWarmup
 from olmo_core.train import callbacks
-from olmo_core.train.callbacks import CheckpointerCallback
+from olmo_core.train.callbacks import CheckpointerCallback, ProfilerCallback
 from olmo_core.train.train_module.transformer import config as transformer_config
 
 from open_instruct import data_loader as data_loader_lib
@@ -153,6 +153,10 @@ def _setup_callbacks(args: dpo_utils.ExperimentConfig, dp_world_size: int):
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_training_gpus=dp_world_size,
     )
+    if args.profiling:
+        trainer_callbacks["profiler"] = ProfilerCallback(
+            skip_first=5, wait=1, warmup=2, active=3, repeat=1, profile_memory=True
+        )
     return trainer_callbacks
 
 

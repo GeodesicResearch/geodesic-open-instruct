@@ -647,6 +647,129 @@ class TestOlmoCoreVsHFGradientDivergence(unittest.TestCase):
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
 @unittest.skipUnless(has_flash_attn_2(), "Flash attention required")
+class TestRoPEPatchEffect(unittest.TestCase):
+    """Test whether the RoPE CPU patch affects gradient divergence between OLMo-core and HF."""
+
+    def _build_olmo_model_without_patch(self, hf_config, vocab_size):
+        """Build OLMo-core model WITHOUT the RoPE CPU patch."""
+        import olmo_core.nn.rope as rope_module  # noqa: PLC0415
+
+        original_fn = rope_module.compute_inv_freqs
+        rope_module.compute_inv_freqs = olmo_core_utils._original_compute_inv_freqs
+
+        olmo_config = olmo_core_utils.get_transformer_config(
+            "allenai/OLMo-2-0425-1B", vocab_size, attn_backend="flash_2"
+        )
+        olmo_config.n_layers = 2
+        model = olmo_config.build(init_device="cpu").to(torch.bfloat16).cuda()
+
+        rope_module.compute_inv_freqs = original_fn
+        return model
+
+    def _build_olmo_model_with_patch(self, hf_config, vocab_size):
+        """Build OLMo-core model WITH the RoPE CPU patch."""
+        olmo_core_utils.patch_rope_for_hf_compatibility()
+
+        olmo_config = olmo_core_utils.get_transformer_config(
+            "allenai/OLMo-2-0425-1B", vocab_size, attn_backend="flash_2"
+        )
+        olmo_config.n_layers = 2
+        return olmo_config.build(init_device="cpu").to(torch.bfloat16).cuda()
+
+    def _make_batch(self, vocab_size):
+        prefix_len = 50
+        response_len = 20
+        shared_prefix = torch.randint(1, vocab_size, (1, prefix_len)).cuda()
+        chosen_response = torch.randint(1, vocab_size, (1, response_len)).cuda()
+        rejected_response = torch.randint(1, vocab_size, (1, response_len)).cuda()
+
+        chosen_ids = torch.cat([shared_prefix, chosen_response], dim=1)
+        rejected_ids = torch.cat([shared_prefix, rejected_response], dim=1)
+
+        chosen_labels = torch.cat([torch.full((1, prefix_len), -100, device="cuda"), chosen_response], dim=1)
+        rejected_labels = torch.cat([torch.full((1, prefix_len), -100, device="cuda"), rejected_response], dim=1)
+
+        return {
+            "chosen_input_ids": chosen_ids,
+            "chosen_labels": chosen_labels,
+            "chosen_attention_mask": torch.ones_like(chosen_ids),
+            "rejected_input_ids": rejected_ids,
+            "rejected_labels": rejected_labels,
+            "rejected_attention_mask": torch.ones_like(rejected_ids),
+        }
+
+    def _compute_grad_norm(self, model):
+        return sum(p.grad.float().norm().item() ** 2 for p in model.parameters() if p.grad is not None) ** 0.5
+
+    def test_rope_patch_reduces_divergence(self):
+        """Test if RoPE CPU patch reduces gradient divergence between OLMo-core and HF."""
+        hf_config = AutoConfig.from_pretrained("allenai/OLMo-2-0425-1B")
+        hf_config.num_hidden_layers = 2
+        hf_config._attn_implementation = "flash_attention_2"
+        hf_model = AutoModelForCausalLM.from_config(hf_config).to(torch.bfloat16).cuda()
+        vocab_size = hf_config.vocab_size
+
+        unpatched_olmo = self._build_olmo_model_without_patch(hf_config, vocab_size)
+        patched_olmo = self._build_olmo_model_with_patch(hf_config, vocab_size)
+
+        hf_state = hf_model.state_dict()
+        converted = olmo_hf_convert.convert_state_from_hf(
+            hf_config, hf_state, model_type=getattr(hf_config, "model_type", None)
+        )
+        converted_gpu = {k: v.to(device="cuda") for k, v in converted.items()}
+
+        unpatched_olmo.load_state_dict(converted_gpu, assign=True, strict=False)
+        patched_olmo.load_state_dict({k: v.clone() for k, v in converted_gpu.items()}, assign=True, strict=False)
+
+        torch.manual_seed(42)
+        batch = self._make_batch(vocab_size)
+
+        hf_model.zero_grad()
+        hf_chosen, hf_rejected, _ = dpo_utils.separate_forward(hf_model, batch)
+        hf_loss = -(hf_chosen - hf_rejected).sigmoid().log().mean()
+        hf_loss.backward()
+        hf_grad_norm = self._compute_grad_norm(hf_model)
+
+        unpatched_olmo.zero_grad()
+        unpatched_chosen, unpatched_rejected, _ = dpo_utils.separate_forward_olmo(unpatched_olmo, batch)
+        unpatched_loss = -(unpatched_chosen - unpatched_rejected).sigmoid().log().mean()
+        unpatched_loss.backward()
+        unpatched_grad_norm = self._compute_grad_norm(unpatched_olmo)
+
+        patched_olmo.zero_grad()
+        patched_chosen, patched_rejected, _ = dpo_utils.separate_forward_olmo(patched_olmo, batch)
+        patched_loss = -(patched_chosen - patched_rejected).sigmoid().log().mean()
+        patched_loss.backward()
+        patched_grad_norm = self._compute_grad_norm(patched_olmo)
+
+        unpatched_grad_diff = abs(hf_grad_norm - unpatched_grad_norm)
+        patched_grad_diff = abs(hf_grad_norm - patched_grad_norm)
+
+        unpatched_logps_diff = (hf_chosen - unpatched_chosen).abs().item()
+        patched_logps_diff = (hf_chosen - patched_chosen).abs().item()
+
+        logger.info(f"HF grad norm: {hf_grad_norm:.6f}")
+        logger.info(f"Unpatched OLMo grad norm: {unpatched_grad_norm:.6f} (diff from HF: {unpatched_grad_diff:.6f})")
+        logger.info(f"Patched OLMo grad norm: {patched_grad_norm:.6f} (diff from HF: {patched_grad_diff:.6f})")
+        logger.info(f"Unpatched logps diff from HF: {unpatched_logps_diff:.6f}")
+        logger.info(f"Patched logps diff from HF: {patched_logps_diff:.6f}")
+
+        if patched_grad_diff < unpatched_grad_diff:
+            logger.info("RoPE patch REDUCES gradient divergence")
+            improvement = (unpatched_grad_diff - patched_grad_diff) / unpatched_grad_diff * 100
+            logger.info(f"Improvement: {improvement:.1f}%")
+        else:
+            logger.info("RoPE patch does NOT reduce gradient divergence")
+
+        self.assertGreater(
+            unpatched_grad_diff + patched_grad_diff,
+            0.0,
+            "Expected some gradient divergence between OLMo-core and HF (even if RoPE patch helps)",
+        )
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+@unittest.skipUnless(has_flash_attn_2(), "Flash attention required")
 class TestFlashAttnVarlenVsStandardGradients(unittest.TestCase):
     """Disproved hypothesis 2: flash_attn_func and flash_attn_varlen_func produce identical gradients.
 

@@ -6,7 +6,6 @@ To run:
     ./scripts/train/build_image_and_launch.sh scripts/test/run_gpu_pytest.sh
 """
 
-import logging
 import pathlib
 import tempfile
 import unittest
@@ -18,9 +17,9 @@ from olmo_core.nn.hf import convert as olmo_hf_convert
 from olmo_core.nn.transformer import TransformerConfig
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from open_instruct import dpo_utils, model_utils, olmo_core_utils
+from open_instruct import dpo_utils, logger_utils, model_utils, olmo_core_utils
 
-logger = logging.getLogger(__name__)
+logger = logger_utils.setup_logger(__name__)
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")

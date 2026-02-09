@@ -201,7 +201,7 @@ def calculate_per_token_logps(logits_output: torch.Tensor, labels: torch.Tensor)
         mask = (local_shifted != -100).float()
         local_logps = torch.gather(local_logits.log_softmax(-1), 2, safe.unsqueeze(2)).squeeze(2) * mask
         logps_dtensor = DTensor.from_local(local_logps, logits_output.device_mesh, (Shard(1),))
-        return logps_dtensor.redistribute(placements=(Replicate(),)).to_local()
+        return logps_dtensor.redistribute(placements=(Replicate(),))
 
     logits = logits_output.to(torch.float32)
     safe = shifted_labels.clamp(min=0)

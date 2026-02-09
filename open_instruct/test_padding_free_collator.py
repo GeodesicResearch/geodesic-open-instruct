@@ -20,6 +20,7 @@ from open_instruct.dataset_transformation import sft_tulu_tokenize_and_truncate_
 from open_instruct.padding_free_collator import (
     TensorDataCollatorWithFlattening,
     TensorDataCollatorWithFlatteningDPO,
+    calculate_per_token_logps,
     concatenated_inputs,
     get_batch_logps,
 )
@@ -238,8 +239,9 @@ class TestDPOPackingIndices(unittest.TestCase):
             batch = collator(batch_features)
             concat_batch, bs = concatenated_inputs(batch)
             logits = torch.randn(1, concat_batch["concatenated_input_ids"].shape[1], 100)
+            per_token_logps = calculate_per_token_logps(logits, concat_batch["concatenated_labels"])
             logps = get_batch_logps(
-                logits, concat_batch["concatenated_labels"], concat_batch["concatenated_cu_seq_lens_k"]
+                per_token_logps, concat_batch["concatenated_labels"], concat_batch["concatenated_cu_seq_lens_k"]
             )
             chosen_logps = logps[:bs]
             rejected_logps = logps[bs:]
@@ -280,8 +282,9 @@ class TestDPOPackingIndices(unittest.TestCase):
         num_indices = len(batch["index"])
         self.assertGreaterEqual(num_indices, expected_min_indices)
         logits = torch.randn(1, concat_batch["concatenated_input_ids"].shape[1], 100)
+        per_token_logps = calculate_per_token_logps(logits, concat_batch["concatenated_labels"])
         logps = get_batch_logps(
-            logits, concat_batch["concatenated_labels"], concat_batch["concatenated_cu_seq_lens_k"]
+            per_token_logps, concat_batch["concatenated_labels"], concat_batch["concatenated_cu_seq_lens_k"]
         )
         self.assertEqual(len(logps), 2 * bs)
 
@@ -290,5 +293,6 @@ class TestDPOPackingIndices(unittest.TestCase):
         labels = torch.full((1, 10), -100, dtype=torch.long)
         labels[0, 0:3] = torch.tensor([1, 2, 3])
         cu_seq_lens = torch.tensor([0, 5, 10], dtype=torch.int32)
-        result = get_batch_logps(logits, labels, cu_seq_lens, average_log_prob=True)
+        per_token_logps = calculate_per_token_logps(logits, labels)
+        result = get_batch_logps(per_token_logps, labels, cu_seq_lens, average_log_prob=True)
         self.assertFalse(torch.isnan(result).any(), f"NaN found in result: {result}")

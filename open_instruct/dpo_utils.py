@@ -781,13 +781,15 @@ def compute_loss(
     raise ValueError(f"Unknown loss type: {loss_type}")
 
 
-def _get_batch_logps(logits: torch.Tensor, labels: torch.Tensor, average_log_prob: bool = False) -> torch.Tensor:
-    """Compute the log probabilities of the given labels under the given logits.
+def _get_batch_logps(
+    per_token_logps: torch.Tensor, labels: torch.Tensor, average_log_prob: bool = False
+) -> torch.Tensor:
+    """Aggregate per-token log probabilities into per-sequence log probabilities.
 
     Args:
-        logits: Logits of the model (unnormalized).
-            Shape: (batch_size, sequence_length, vocab_size)
-        labels: Labels for which to compute the log probabilities.
+        per_token_logps: Per-token log probabilities where position i contains
+            log p(labels[i+1] | x_i). Shape: (batch_size, sequence_length)
+        labels: Labels used to build the loss mask.
             Label tokens with a value of -100 are ignored. Shape: (batch_size, sequence_length)
         average_log_prob: If True, return the average log probability per (non-masked) token.
             Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
@@ -796,9 +798,7 @@ def _get_batch_logps(logits: torch.Tensor, labels: torch.Tensor, average_log_pro
         A tensor of shape (batch_size,) containing the average/sum
             log probabilities of the given labels under the given logits.
     """
-    assert logits.shape[:-1] == labels.shape
-
-    per_token_logps = calculate_per_token_logps(logits, labels)[:, :-1]
+    per_token_logps = per_token_logps[:, :-1]
     loss_mask = labels[:, 1:] != -100
 
     if average_log_prob:
@@ -897,17 +897,15 @@ def concatenated_forward(
         logits = model(**inputs).logits
         aux_loss = None
 
+    concatenated_labels = concatenated_batch["concatenated_labels"]
+    per_token_logps = calculate_per_token_logps(logits, concatenated_labels)
+
     if not packing:
-        all_logps = _get_batch_logps(
-            logits, concatenated_batch["concatenated_labels"], average_log_prob=average_log_prob
-        )
+        all_logps = _get_batch_logps(per_token_logps, concatenated_labels, average_log_prob=average_log_prob)
         bs = batch["chosen_input_ids"].shape[0]
     else:
         all_logps = pf_get_batch_logps(
-            logits,
-            concatenated_batch["concatenated_labels"],
-            inputs["cu_seq_lens_k"],
-            average_log_prob=average_log_prob,
+            per_token_logps, concatenated_labels, inputs["cu_seq_lens_k"], average_log_prob=average_log_prob
         )
     chosen_logps = all_logps[:bs]
     rejected_logps = all_logps[bs:]
@@ -949,8 +947,9 @@ def separate_forward(
         ).logits.to(torch.float32)
         chosen_aux_loss = None
 
-    chosen_logps = _get_batch_logps(chosen_logits, chosen_batch["labels"], average_log_prob=average_log_prob)
-    del chosen_batch, chosen_logits
+    chosen_per_token_logps = calculate_per_token_logps(chosen_logits, chosen_batch["labels"])
+    chosen_logps = _get_batch_logps(chosen_per_token_logps, chosen_batch["labels"], average_log_prob=average_log_prob)
+    del chosen_batch, chosen_logits, chosen_per_token_logps
     if output_router_logits:
         del chosen_outputs
     torch.cuda.empty_cache()
@@ -971,8 +970,11 @@ def separate_forward(
         ).logits.to(torch.float32)
         rejected_aux_loss = None
 
-    rejected_logps = _get_batch_logps(rejected_logits, rejected_batch["labels"], average_log_prob=average_log_prob)
-    del rejected_batch, rejected_logits
+    rejected_per_token_logps = calculate_per_token_logps(rejected_logits, rejected_batch["labels"])
+    rejected_logps = _get_batch_logps(
+        rejected_per_token_logps, rejected_batch["labels"], average_log_prob=average_log_prob
+    )
+    del rejected_batch, rejected_logits, rejected_per_token_logps
     if output_router_logits:
         del rejected_outputs
     torch.cuda.empty_cache()
@@ -1015,15 +1017,15 @@ def concatenated_forward_olmo(
         concatenated_batch, bs = pf_concatenated_inputs(batch)
 
     concatenated_labels = concatenated_batch["concatenated_labels"]
-    output = model(concatenated_batch["concatenated_input_ids"], labels=concatenated_labels, return_logits=True)
-    logits = output.logits
+    output = model(concatenated_batch["concatenated_input_ids"], labels=concatenated_labels)
+    per_token_logps = output.loss
 
     if not packing:
-        all_logps = _get_batch_logps(logits, concatenated_labels, average_log_prob=average_log_prob)
+        all_logps = _get_batch_logps(per_token_logps, concatenated_labels, average_log_prob=average_log_prob)
         bs = batch["chosen_input_ids"].shape[0]
     else:
         all_logps = pf_get_batch_logps(
-            logits,
+            per_token_logps,
             concatenated_labels,
             concatenated_batch["concatenated_cu_seq_lens_k"],
             average_log_prob=average_log_prob,
@@ -1056,17 +1058,17 @@ def separate_forward_olmo(
     """
     del output_router_logits
     chosen_batch = process_batch(batch, "chosen")
-    chosen_output = model(chosen_batch["input_ids"], labels=chosen_batch["labels"], return_logits=True)
+    chosen_output = model(chosen_batch["input_ids"], labels=chosen_batch["labels"])
 
-    chosen_logps = _get_batch_logps(chosen_output.logits, chosen_batch["labels"], average_log_prob=average_log_prob)
+    chosen_logps = _get_batch_logps(chosen_output.loss, chosen_batch["labels"], average_log_prob=average_log_prob)
     del chosen_batch
     torch.cuda.empty_cache()
 
     rejected_batch = process_batch(batch, "rejected")
-    rejected_output = model(rejected_batch["input_ids"], labels=rejected_batch["labels"], return_logits=True)
+    rejected_output = model(rejected_batch["input_ids"], labels=rejected_batch["labels"])
 
     rejected_logps = _get_batch_logps(
-        rejected_output.logits, rejected_batch["labels"], average_log_prob=average_log_prob
+        rejected_output.loss, rejected_batch["labels"], average_log_prob=average_log_prob
     )
     del rejected_batch
     torch.cuda.empty_cache()

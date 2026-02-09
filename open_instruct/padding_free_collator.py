@@ -2,7 +2,6 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-from torch.distributed.tensor import DTensor, Replicate, Shard
 from transformers import DefaultDataCollator
 
 from open_instruct import logger_utils
@@ -188,22 +187,11 @@ class TensorDataCollatorWithFlatteningDPO(TensorDataCollatorWithFlattening):
         return result
 
 
-def calculate_per_token_logps(logits_output: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+def calculate_per_token_logps(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     shifted_labels = torch.full_like(labels, -100)
     shifted_labels[:, :-1] = labels[:, 1:]
 
-    if isinstance(logits_output, DTensor):
-        local_logits = logits_output.to_local().to(torch.float32)
-        tp_rank = logits_output.device_mesh.get_local_rank()
-        chunk = local_logits.shape[1]
-        local_shifted = shifted_labels[:, tp_rank * chunk : (tp_rank + 1) * chunk]
-        safe = local_shifted.clamp(min=0)
-        mask = (local_shifted != -100).float()
-        local_logps = torch.gather(local_logits.log_softmax(-1), 2, safe.unsqueeze(2)).squeeze(2) * mask
-        logps_dtensor = DTensor.from_local(local_logps, logits_output.device_mesh, (Shard(1),))
-        return logps_dtensor.redistribute(placements=(Replicate(),))
-
-    logits = logits_output.to(torch.float32)
+    logits = logits.to(torch.float32)
     safe = shifted_labels.clamp(min=0)
     mask = (shifted_labels != -100).float()
     return torch.gather(logits.log_softmax(-1), 2, safe.unsqueeze(2)).squeeze(2) * mask
@@ -252,9 +240,9 @@ def concatenated_inputs(
 
 # for dpo - padding free
 def get_batch_logps(
-    logits: torch.Tensor, labels: torch.Tensor, cu_seq_lens: torch.Tensor, average_log_prob: bool = False
+    per_token_logps: torch.Tensor, labels: torch.Tensor, cu_seq_lens: torch.Tensor, average_log_prob: bool = False
 ) -> torch.Tensor:
-    per_token_logps = calculate_per_token_logps(logits, labels)[:, :-1]
+    per_token_logps = per_token_logps[:, :-1]
     loss_mask = labels[:, 1:] != -100
 
     cu_seq_lens = cu_seq_lens.clone() - 1

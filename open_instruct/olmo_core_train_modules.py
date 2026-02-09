@@ -11,18 +11,64 @@ from typing import Any
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
+from olmo_core.distributed import utils as dist_utils
+from olmo_core.nn.lm_head import LMHead, LMOutputWithLoss
 from olmo_core.nn.transformer import Transformer
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 from olmo_core.train.train_module import TransformerTrainModule
 from olmo_core.train.train_module.transformer import config as transformer_config
+from torch.distributed.tensor import DTensor, Replicate, Shard
 from transformers import PreTrainedTokenizer
 
 from open_instruct import data_types, dpo_utils, grpo_utils, logger_utils, model_utils, utils
 from open_instruct.rl_utils import masked_mean
 
 logger = logger_utils.setup_logger(__name__)
+
+
+class DPOLMHead(LMHead):
+    """LM head that returns per-token log-probabilities for DPO training.
+
+    All DTensor handling happens inside this module (which is torch.compiled),
+    avoiding DTensor/compile backward incompatibilities in the DPO loss code.
+    Returns per-token logps with the same semantics as calculate_per_token_logps:
+    output[i] = log p(labels[i+1] | logits[i]), with label shifting done internally.
+    """
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        labels: torch.Tensor | None = None,
+        ignore_index: int = -100,
+        loss_reduction: str = "mean",
+        z_loss_multiplier: float | None = None,
+        loss_div_factor: torch.Tensor | float | None = None,
+        return_logits: bool | None = None,
+        logits_to_keep: int | torch.Tensor = 0,
+    ) -> torch.Tensor | LMOutputWithLoss:
+        if labels is None:
+            return super().forward(x, labels=labels)
+
+        B = x.shape[0]
+        h = self.norm(x) if self.norm is not None else x
+        logits = self.w_out(h)
+
+        local_logits = dist_utils.get_local_tensor(logits).to(torch.float32)
+        local_labels = dist_utils.get_local_tensor(labels)
+        shifted_labels = torch.full_like(local_labels, ignore_index)
+        shifted_labels[:, :-1] = local_labels[:, 1:]
+        safe = shifted_labels.clamp(min=0)
+        mask = (shifted_labels != ignore_index).float()
+        local_logps = torch.gather(local_logits.log_softmax(-1), 2, safe.unsqueeze(2)).squeeze(2) * mask
+
+        per_token_logps = local_logps.view(B, -1)
+        if self.tp_enabled:
+            logps_dt = DTensor.from_local(per_token_logps, self._tp_mesh, (Shard(1),))
+            per_token_logps = logps_dt.redistribute(placements=(Replicate(),)).to_local()
+        return LMOutputWithLoss(logits=None, loss=per_token_logps, ce_loss=per_token_logps.detach(), z_loss=None)
 
 
 class DPOTrainModule(TransformerTrainModule):

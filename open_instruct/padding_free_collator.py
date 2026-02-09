@@ -8,6 +8,19 @@ from open_instruct import logger_utils
 
 logger = logger_utils.setup_logger(__name__)
 
+PAD_VALUES: dict[str, int] = {"labels": -100, "attention_mask": 0, "position_ids": 0, "seq_idx": -1}
+
+
+def pad_to_length(tensor: torch.Tensor, length: int, pad_value: int | float) -> torch.Tensor:
+    """Right-pad a tensor to a specified length along the last dimension."""
+    if tensor.size(-1) >= length:
+        return tensor
+    return F.pad(tensor, (0, length - tensor.size(-1)), value=pad_value)
+
+
+def _truncate_to_length(tensors: dict[str, torch.Tensor | None], length: int) -> dict[str, torch.Tensor | None]:
+    return {k: (v[:, :length] if v is not None else None) for k, v in tensors.items()}
+
 
 @dataclass
 class TensorDataCollatorWithFlattening(DefaultDataCollator):
@@ -77,6 +90,13 @@ class TensorDataCollatorWithFlattening(DefaultDataCollator):
         input_ids_tensor = torch.cat(ret["input_ids"], dim=0)[None]
         labels_tensor = torch.cat(ret["labels"], dim=0)[None]
 
+        tensors = {
+            "input_ids": input_ids_tensor,
+            "labels": labels_tensor,
+            "position_ids": position_ids_tensor,
+            "seq_idx": seq_idx_tensor,
+        }
+
         num_valid_seqs = len(features)
         wasted_tokens = 0
         sequences_dropped = 0
@@ -84,12 +104,7 @@ class TensorDataCollatorWithFlattening(DefaultDataCollator):
             current_len = input_ids_tensor.shape[1]
             if current_len > self.max_seq_length:
                 wasted_tokens = current_len - self.max_seq_length
-                input_ids_tensor = input_ids_tensor[:, : self.max_seq_length]
-                labels_tensor = labels_tensor[:, : self.max_seq_length]
-                if position_ids_tensor is not None:
-                    position_ids_tensor = position_ids_tensor[:, : self.max_seq_length]
-                if seq_idx_tensor is not None:
-                    seq_idx_tensor = seq_idx_tensor[:, : self.max_seq_length]
+                tensors = _truncate_to_length(tensors, self.max_seq_length)
                 if self.return_flash_attn_kwargs:
                     cu_seq_lens_tensor = ret["cu_seq_lens_q"].clamp_max_(self.max_seq_length)
                     valid_mask = torch.cat(
@@ -109,29 +124,23 @@ class TensorDataCollatorWithFlattening(DefaultDataCollator):
                         cu_seq_lens_tensor = cu_seq_lens_tensor[valid_mask]
                     ret["cu_seq_lens_q"] = ret["cu_seq_lens_k"] = cu_seq_lens_tensor
             elif current_len < self.max_seq_length:
-                pad_len = self.max_seq_length - current_len
-                input_ids_tensor = F.pad(input_ids_tensor, (0, pad_len), value=0)
-                labels_tensor = F.pad(labels_tensor, (0, pad_len), value=-100)
-                if position_ids_tensor is not None:
-                    position_ids_tensor = F.pad(position_ids_tensor, (0, pad_len), value=0)
-                if seq_idx_tensor is not None:
-                    seq_idx_tensor = F.pad(seq_idx_tensor, (0, pad_len), value=-1)
+                for key, tensor in tensors.items():
+                    if tensor is not None:
+                        tensors[key] = pad_to_length(tensor, self.max_seq_length, PAD_VALUES.get(key, 0))
 
-        ret["input_ids"] = input_ids_tensor
-        ret["labels"] = labels_tensor
         ret["_num_valid_seqs"] = num_valid_seqs
         ret["_wasted_tokens_from_truncation"] = wasted_tokens
         ret["_sequences_dropped"] = sequences_dropped
-        if position_ids_tensor is not None:
-            ret["position_ids"] = position_ids_tensor
-        if seq_idx_tensor is not None:
-            ret["seq_idx"] = seq_idx_tensor
+        for key, tensor in tensors.items():
+            if tensor is not None:
+                ret[key] = tensor
         return ret
 
 
 @dataclass
 class TensorDataCollatorWithFlatteningDPO(TensorDataCollatorWithFlattening):
     def __call__(self, features, return_tensors=None, separator_id=None):
+        # Collate chosen and rejected separately, then combine with min(valid_seqs) alignment
         def filter_batch(match_string, features):
             return [{k.replace(match_string, ""): v for k, v in f.items() if match_string in k} for f in features]
 
@@ -153,13 +162,20 @@ class TensorDataCollatorWithFlatteningDPO(TensorDataCollatorWithFlattening):
         if num_valid < chosen_valid and "cu_seq_lens_q" in chosen_features:
             chosen_features["cu_seq_lens_q"] = chosen_features["cu_seq_lens_q"][: num_valid + 1]
             chosen_features["cu_seq_lens_k"] = chosen_features["cu_seq_lens_k"][: num_valid + 1]
+            boundary = chosen_features["cu_seq_lens_k"][-1].item()
+            chosen_features["labels"][:, boundary:] = -100
         if num_valid < rejected_valid and "cu_seq_lens_q" in rejected_features:
             rejected_features["cu_seq_lens_q"] = rejected_features["cu_seq_lens_q"][: num_valid + 1]
             rejected_features["cu_seq_lens_k"] = rejected_features["cu_seq_lens_k"][: num_valid + 1]
+            boundary = rejected_features["cu_seq_lens_k"][-1].item()
+            rejected_features["labels"][:, boundary:] = -100
 
+        total_sequences = len(features)
+        sequences_dropped = max(chosen_dropped, rejected_dropped)
         result = {
             "_wasted_tokens_from_truncation": chosen_wasted + rejected_wasted,
-            "_sequences_dropped": max(chosen_dropped, rejected_dropped),
+            "_sequences_dropped": sequences_dropped,
+            "_sequences_dropped_pct": 100.0 * sequences_dropped / total_sequences if total_sequences > 0 else 0.0,
         }
         for k in chosen_features:
             result["chosen_" + k] = chosen_features[k]
@@ -222,8 +238,10 @@ def get_batch_logps(
     logits = logits[:, :-1, :]
     loss_mask = labels != -100
 
+    # dummy token; we'll ignore the losses on these tokens via loss_mask
     labels = labels.masked_fill(~loss_mask, 0)
 
+    # shift cu_seq_lens to match the labels/logits shift above
     cu_seq_lens = cu_seq_lens.clone() - 1
     cu_seq_lens[0] = 0
 
@@ -244,5 +262,5 @@ def get_batch_logps(
     if average_log_prob:
         segment_counts = torch.zeros(num_seqs, device=mask_float.device, dtype=mask_float.dtype)
         segment_counts.scatter_add_(0, segment_ids, mask_float)
-        return segment_sums / segment_counts
+        return segment_sums / segment_counts.clamp(min=1)
     return segment_sums

@@ -271,13 +271,18 @@ class HFDataLoader(data_loader.DataLoaderBase):
             ValueError: If no input_ids tensors are found in the batch.
         """
         if "attention_mask" in batch:
+            # attention_mask excludes padding tokens
             num_tokens = batch["attention_mask"].sum().item()
-        elif "chosen_cu_seq_lens_k" in batch:
-            chosen_actual = batch["chosen_cu_seq_lens_k"][-1].item()
-            rejected_actual = batch["rejected_cu_seq_lens_k"][-1].item()
-            num_tokens = chosen_actual + rejected_actual
-        elif "cu_seq_lens_k" in batch:
-            num_tokens = batch["cu_seq_lens_k"][-1].item()
+        elif any(k.endswith("_attention_mask") for k in batch):
+            num_tokens = sum(
+                v.sum().item()
+                for k, v in batch.items()
+                if k.endswith("attention_mask") and isinstance(v, torch.Tensor)
+            )
+        elif any(k.endswith("cu_seq_lens_k") for k in batch):
+            num_tokens = sum(
+                v[-1].item() for k, v in batch.items() if k.endswith("cu_seq_lens_k") and isinstance(v, torch.Tensor)
+            )
         else:
             num_tokens = sum(v.numel() for k, v in batch.items() if "input_ids" in k and isinstance(v, torch.Tensor))
         return num_tokens * self.dp_world_size

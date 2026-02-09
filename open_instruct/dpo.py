@@ -122,7 +122,7 @@ def _setup_scheduler(args: dpo_utils.ExperimentConfig, num_training_steps: int):
     return scheduler
 
 
-def _setup_callbacks(args: dpo_utils.ExperimentConfig, dp_world_size: int):
+def _setup_callbacks(args: dpo_utils.ExperimentConfig, dp_world_size: int, model):
     """Return callbacks dict."""
     json_config = dpo_utils.config_to_json_serializable(vars(args))
     trainer_callbacks: dict[str, callbacks.Callback] = {"beaker": BeakerCallbackV2(config=json_config)}
@@ -222,11 +222,6 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
     if args.use_lora:
         raise ValueError("LoRA is not supported with OLMo-core DPO training. Use dpo_tune_cache.py instead.")
 
-    if args.tensor_parallel_degree > 1:
-        raise NotImplementedError(
-            "Tensor parallelism is not supported with DPO (DTensor view ops are incompatible with torch.compile)."
-        )
-
     if args.context_parallel_degree > 1:
         raise NotImplementedError(
             "Context parallelism is not supported with DPO (requires batch_shard_by_document integration)."
@@ -237,7 +232,6 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
 
     if args.use_8bit_optimizer:
         raise ValueError("use_8bit_optimizer is not supported with OLMo-core DPO training.")
-
 
     tc.tokenizer_name_or_path = (
         args.model_name_or_path if tc.tokenizer_name_or_path is None else tc.tokenizer_name_or_path
@@ -272,7 +266,8 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
 
     train.prepare_training_environment(seed=args.seed)
 
-    dp_rank = distributed_utils.get_rank() if distributed_utils.is_distributed() else 0
+    tp_degree = args.tensor_parallel_degree
+    dp_rank = distributed_utils.get_rank() // tp_degree if distributed_utils.is_distributed() else 0
     is_main_process = dp_rank == 0
 
     dataset = _load_dataset_distributed(args, tc, transform_fn_args, is_main_process)
@@ -280,7 +275,7 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
     dataset.set_format(type="pt")  # Must be after shuffle (shuffle resets format)
 
     world_size = distributed_utils.get_world_size() if distributed_utils.is_distributed() else 1
-    dp_world_size = world_size
+    dp_world_size = world_size // tp_degree
 
     logger_utils.setup_logger(rank=dp_rank)
 
@@ -317,7 +312,9 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
     # 4x batch size: forward-only (no backward), so no activation storage needed.
     # With packing, use smaller batch size (half) to avoid truncation when packing long sequences.
     cache_batch_multiplier = 0.5 if args.packing else 4
-    cache_batch_size = int(args.per_device_train_batch_size * cache_batch_multiplier * dp_world_size)
+    cache_batch_size = max(
+        int(args.per_device_train_batch_size * cache_batch_multiplier * dp_world_size), dp_world_size
+    )
     cache_data_loader = data_loader_lib.HFDataLoader(
         dataset=dataset,
         batch_size=cache_batch_size,
@@ -369,6 +366,11 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
         if args.activation_memory_budget < 1.0 and args.compile_model
         else None
     )
+    tp_config = (
+        transformer_config.TransformerTensorParallelConfig(degree=args.tensor_parallel_degree)
+        if args.tensor_parallel_degree > 1
+        else None
+    )
 
     train_module = DPOTrainModule(
         model=model,
@@ -377,6 +379,7 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
         max_sequence_length=args.max_seq_length,
         dpo_config=args,
         dp_config=dp_config,
+        tp_config=tp_config,
         ac_config=ac_config,
         compile_model=args.compile_model,
         max_grad_norm=max_grad_norm,
@@ -397,7 +400,7 @@ def main(args: dpo_utils.ExperimentConfig, tc: dataset_transformation.TokenizerC
             dist.destroy_process_group()
         return
 
-    trainer_callbacks = _setup_callbacks(args, dp_world_size)
+    trainer_callbacks = _setup_callbacks(args, dp_world_size, train_module.model)
 
     trainer = train.TrainerConfig(
         save_folder=args.output_dir,

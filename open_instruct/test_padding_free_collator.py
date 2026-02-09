@@ -17,7 +17,12 @@ from transformers import (
 
 from open_instruct.dataset_processor import CHAT_TEMPLATES
 from open_instruct.dataset_transformation import sft_tulu_tokenize_and_truncate_v1
-from open_instruct.padding_free_collator import TensorDataCollatorWithFlattening
+from open_instruct.padding_free_collator import (
+    TensorDataCollatorWithFlattening,
+    TensorDataCollatorWithFlatteningDPO,
+    concatenated_inputs,
+    get_batch_logps,
+)
 
 try:
     import mamba_ssm  # noqa
@@ -168,3 +173,122 @@ class TestPaddingFree(unittest.TestCase):
         pf_grads = {n: p.grad for n, p in pf_model.named_parameters()}
         for k, g in grads.items():
             torch.testing.assert_close(g, pf_grads[k])
+
+
+def make_dpo_features(
+    num_samples: int, chosen_lengths: list[int], rejected_lengths: list[int], start_index: int = 0
+) -> list[dict]:
+    features = []
+    for i in range(num_samples):
+        chosen_len = chosen_lengths[i % len(chosen_lengths)]
+        rejected_len = rejected_lengths[i % len(rejected_lengths)]
+        features.append(
+            {
+                "chosen_input_ids": torch.ones(chosen_len, dtype=torch.long),
+                "chosen_labels": torch.ones(chosen_len, dtype=torch.long),
+                "rejected_input_ids": torch.ones(rejected_len, dtype=torch.long),
+                "rejected_labels": torch.ones(rejected_len, dtype=torch.long),
+                "index": start_index + i,
+            }
+        )
+    return features
+
+
+class TestDPOPackingIndices(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("no_truncation", 1000, 4, [50], [50], 0),
+            ("with_padding", 500, 4, [50], [50], 0),
+            ("truncation", 150, None, [100], [100], 0),
+        ]
+    )
+    def test_indices_preserved(self, name, max_seq_length, expected_count, chosen_lens, rejected_lens, start_index):
+        collator = TensorDataCollatorWithFlatteningDPO(max_seq_length=max_seq_length)
+        features = make_dpo_features(
+            num_samples=4, chosen_lengths=chosen_lens, rejected_lengths=rejected_lens, start_index=start_index
+        )
+        batch = collator(features)
+        self.assertIn("index", batch)
+        if expected_count is not None:
+            self.assertEqual(len(batch["index"]), expected_count)
+        else:
+            self.assertLess(len(batch["index"]), 4)
+
+    @parameterized.expand([("no_truncation", 1000, [50], [50]), ("with_truncation", 200, [100], [100])])
+    def test_cu_seq_lens_matches_index_count(self, name, max_seq_length, chosen_lens, rejected_lens):
+        collator = TensorDataCollatorWithFlatteningDPO(max_seq_length=max_seq_length)
+        features = make_dpo_features(num_samples=4, chosen_lengths=chosen_lens, rejected_lengths=rejected_lens)
+        batch = collator(features)
+        num_indices = len(batch["index"])
+        self.assertEqual(len(batch["chosen_cu_seq_lens_k"]), num_indices + 1)
+        self.assertEqual(len(batch["rejected_cu_seq_lens_k"]), num_indices + 1)
+
+    @parameterized.expand([("no_truncation", 1000, [100], [100]), ("with_truncation", 300, [100], [100])])
+    def test_simulate_reference_cache(self, name, max_seq_length, chosen_lens, rejected_lens):
+        collator = TensorDataCollatorWithFlatteningDPO(max_seq_length=max_seq_length)
+        num_total_samples = 16
+        all_features = make_dpo_features(
+            num_samples=num_total_samples, chosen_lengths=chosen_lens, rejected_lengths=rejected_lens
+        )
+        chosen_tensor = torch.full((num_total_samples,), float("-inf"))
+        rejected_tensor = torch.full((num_total_samples,), float("-inf"))
+        batch_size = 4
+        for batch_start in range(0, num_total_samples, batch_size):
+            batch_features = all_features[batch_start : batch_start + batch_size]
+            batch = collator(batch_features)
+            concat_batch, bs = concatenated_inputs(batch)
+            logits = torch.randn(1, concat_batch["concatenated_input_ids"].shape[1], 100)
+            logps = get_batch_logps(
+                logits, concat_batch["concatenated_labels"], concat_batch["concatenated_cu_seq_lens_k"]
+            )
+            chosen_logps = logps[:bs]
+            rejected_logps = logps[bs:]
+            self.assertEqual(len(chosen_logps), len(batch["index"]))
+            chosen_tensor[batch["index"]] = chosen_logps
+            rejected_tensor[batch["index"]] = rejected_logps
+
+        if max_seq_length >= 1000:
+            missing = torch.where(chosen_tensor == float("-inf"))[0]
+            self.assertEqual(len(missing), 0, f"Missing indices: {missing[:10].tolist()}")
+        else:
+            missing = torch.where(chosen_tensor == float("-inf"))[0]
+            self.assertGreater(len(missing), 0)
+
+    def test_asymmetric_truncation(self):
+        collator = TensorDataCollatorWithFlatteningDPO(max_seq_length=250)
+        features = make_dpo_features(num_samples=4, chosen_lengths=[100], rejected_lengths=[50])
+        batch = collator(features)
+        num_indices = len(batch["index"])
+        self.assertEqual(len(batch["chosen_cu_seq_lens_k"]), num_indices + 1)
+        self.assertEqual(len(batch["rejected_cu_seq_lens_k"]), num_indices + 1)
+
+    def test_concatenated_inputs_returns_correct_bs(self):
+        collator = TensorDataCollatorWithFlatteningDPO(max_seq_length=1000)
+        features = make_dpo_features(num_samples=4, chosen_lengths=[50], rejected_lengths=[50])
+        batch = collator(features)
+        concat_batch, bs = concatenated_inputs(batch)
+        self.assertEqual(bs, len(batch["index"]))
+        self.assertIn("concatenated_cu_seq_lens_k", concat_batch)
+        self.assertEqual(len(concat_batch["concatenated_cu_seq_lens_k"]), 2 * bs + 1)
+
+    @parameterized.expand([("no_truncation", 1000, 4), ("slight_truncation", 300, 3), ("heavy_truncation", 150, 1)])
+    def test_logps_count_matches_indices(self, name, max_seq_length, expected_min_indices):
+        collator = TensorDataCollatorWithFlatteningDPO(max_seq_length=max_seq_length)
+        features = make_dpo_features(num_samples=4, chosen_lengths=[100], rejected_lengths=[100])
+        batch = collator(features)
+        concat_batch, bs = concatenated_inputs(batch)
+        num_indices = len(batch["index"])
+        self.assertGreaterEqual(num_indices, expected_min_indices)
+        logits = torch.randn(1, concat_batch["concatenated_input_ids"].shape[1], 100)
+        logps = get_batch_logps(
+            logits, concat_batch["concatenated_labels"], concat_batch["concatenated_cu_seq_lens_k"]
+        )
+        self.assertEqual(len(logps), 2 * bs)
+
+    def test_get_batch_logps_no_nan_on_empty_segment(self):
+        logits = torch.randn(1, 10, 50)
+        labels = torch.full((1, 10), -100, dtype=torch.long)
+        labels[0, 0:3] = torch.tensor([1, 2, 3])
+        cu_seq_lens = torch.tensor([0, 5, 10], dtype=torch.int32)
+        result = get_batch_logps(logits, labels, cu_seq_lens, average_log_prob=True)
+        self.assertFalse(torch.isnan(result).any(), f"NaN found in result: {result}")

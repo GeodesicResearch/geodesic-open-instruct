@@ -1020,7 +1020,12 @@ def concatenated_forward_olmo(
     else:
         concatenated_batch, bs = pf_concatenated_inputs(batch)
 
-    logits = distributed_utils.get_full_tensor(model(concatenated_batch["concatenated_input_ids"])).to(torch.float32)
+    output = model(
+        concatenated_batch["concatenated_input_ids"],
+        labels=concatenated_batch["concatenated_labels"],
+        return_logits=True,
+    )
+    logits = distributed_utils.get_full_tensor(output.logits).to(torch.float32)
 
     if not packing:
         all_logps = _get_batch_logps(
@@ -1061,14 +1066,16 @@ def separate_forward_olmo(
     """
     del output_router_logits
     chosen_batch = process_batch(batch, "chosen")
-    chosen_logits = distributed_utils.get_full_tensor(model(chosen_batch["input_ids"])).to(torch.float32)
+    chosen_output = model(chosen_batch["input_ids"], labels=chosen_batch["labels"], return_logits=True)
+    chosen_logits = distributed_utils.get_full_tensor(chosen_output.logits).to(torch.float32)
 
     chosen_logps = _get_batch_logps(chosen_logits, chosen_batch["labels"], average_log_prob=average_log_prob)
     del chosen_batch, chosen_logits
     torch.cuda.empty_cache()
 
     rejected_batch = process_batch(batch, "rejected")
-    rejected_logits = distributed_utils.get_full_tensor(model(rejected_batch["input_ids"])).to(torch.float32)
+    rejected_output = model(rejected_batch["input_ids"], labels=rejected_batch["labels"], return_logits=True)
+    rejected_logits = distributed_utils.get_full_tensor(rejected_output.logits).to(torch.float32)
 
     rejected_logps = _get_batch_logps(rejected_logits, rejected_batch["labels"], average_log_prob=average_log_prob)
     del rejected_batch, rejected_logits

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
+from torch.distributed import tensor as distributed_tensor
 from transformers import DefaultDataCollator
 
 from open_instruct import logger_utils
@@ -187,6 +188,28 @@ class TensorDataCollatorWithFlatteningDPO(TensorDataCollatorWithFlattening):
         return result
 
 
+def calculate_per_token_logps(logits_output: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    shifted_labels = torch.full_like(labels, -100)
+    shifted_labels[:, :-1] = labels[:, 1:]
+
+    if isinstance(logits_output, distributed_tensor.DTensor):
+        local_logits = logits_output.to_local().to(torch.float32)
+        tp_rank = logits_output.device_mesh.get_local_rank()
+        chunk = local_logits.shape[1]
+        local_shifted = shifted_labels[:, tp_rank * chunk : (tp_rank + 1) * chunk]
+        safe = local_shifted.clamp(min=0)
+        mask = (local_shifted != -100).float()
+        local_logps = torch.gather(local_logits.log_softmax(-1), 2, safe.unsqueeze(2)).squeeze(2) * mask
+        return distributed_tensor.DTensor.from_local(
+            local_logps, logits_output.device_mesh, logits_output.placements
+        ).full_tensor()
+
+    logits = logits_output.to(torch.float32)
+    safe = shifted_labels.clamp(min=0)
+    mask = (shifted_labels != -100).float()
+    return torch.gather(logits.log_softmax(-1), 2, safe.unsqueeze(2)).squeeze(2) * mask
+
+
 # - dpo concatenation  for padding free
 def concatenated_inputs(
     batch: dict[str, list | torch.Tensor], tag: str = "concatenated_"
@@ -232,20 +255,11 @@ def concatenated_inputs(
 def get_batch_logps(
     logits: torch.Tensor, labels: torch.Tensor, cu_seq_lens: torch.Tensor, average_log_prob: bool = False
 ) -> torch.Tensor:
-    assert logits.shape[:-1] == labels.shape
+    per_token_logps = calculate_per_token_logps(logits, labels)[:, :-1]
+    loss_mask = labels[:, 1:] != -100
 
-    labels = labels[:, 1:].clone()
-    logits = logits[:, :-1, :]
-    loss_mask = labels != -100
-
-    # dummy token; we'll ignore the losses on these tokens via loss_mask
-    labels = labels.masked_fill(~loss_mask, 0)
-
-    # shift cu_seq_lens to match the labels/logits shift above
     cu_seq_lens = cu_seq_lens.clone() - 1
     cu_seq_lens[0] = 0
-
-    per_token_logps = torch.gather(logits.log_softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
 
     num_seqs = cu_seq_lens.shape[0] - 1
     seq_len = per_token_logps.shape[1]

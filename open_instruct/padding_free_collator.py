@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import torch
+import torch.distributed.nn.functional as dist_functional
 import torch.nn.functional as F
 from torch.distributed import tensor as distributed_tensor
 from transformers import DefaultDataCollator
@@ -200,9 +201,9 @@ def calculate_per_token_logps(logits_output: torch.Tensor, labels: torch.Tensor)
         safe = local_shifted.clamp(min=0)
         mask = (local_shifted != -100).float()
         local_logps = torch.gather(local_logits.log_softmax(-1), 2, safe.unsqueeze(2)).squeeze(2) * mask
-        return distributed_tensor.DTensor.from_local(
-            local_logps, logits_output.device_mesh, logits_output.placements
-        ).full_tensor()
+        tp_group = logits_output.device_mesh.get_group(mesh_dim=0)
+        gathered = dist_functional.all_gather(local_logps, group=tp_group)
+        return torch.cat(gathered, dim=1)
 
     logits = logits_output.to(torch.float32)
     safe = shifted_labels.clamp(min=0)

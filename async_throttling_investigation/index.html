@@ -1,0 +1,1626 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://github.com/allenai/open-instruct/async_throttling_investigation/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.ico">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>Async Pipeline Throttling Investigation & Fix - Open Instruct</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="ai2-dark" data-md-color-primary="custom" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#async-pipeline-throttling-investigation-fix" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Open Instruct" class="md-header__button md-logo" aria-label="Open Instruct" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Open Instruct
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Async Pipeline Throttling Investigation &amp; Fix
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="ai2-dark" data-md-color-primary="custom" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="ai2" data-md-color-primary="custom" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7M9 21v-1h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1m3-17a5 5 0 0 0-5 5c0 2.05 1.23 3.81 3 4.58V16h4v-2.42c1.77-.77 3-2.53 3-4.58a5 5 0 0 0-5-5"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/allenai/open-instruct" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    allenai/open-instruct
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Open Instruct" class="md-nav__button md-logo" aria-label="Open Instruct" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Open Instruct
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/allenai/open-instruct" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    allenai/open-instruct
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../get_started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../get_started/ai2_internal_setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ai2 Internal Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Models
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../olmo3.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../olmo2.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tulu3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tulu3 Reproduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tulu1_tulu2.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Training
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/dataset_transformation.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/trained_model_location.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/finetune.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/dpo.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/grpo.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/ppo.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/reward_modeling.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Not Maintained
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Not Maintained
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/synthetic_preference_dataset.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executive Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#problem-statement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem Statement
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Problem Statement">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#observed-symptoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observed Symptoms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Impact
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#root-cause-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Root Cause Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Root Cause Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#design-intent-how-throttling-should-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design Intent: How Throttling SHOULD Work
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-bug-unbounded-intermediate-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Bug: Unbounded Intermediate Queue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#historical-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Historical Context
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Fix
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Fix">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#task-1-bound-the-completion_queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 1: Bound the completion_queue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#task-2-add-staleness-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task 2: Add Staleness Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#off-policy-sampling-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Off-Policy Sampling Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Off-Policy Sampling Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#are-stale-samples-being-used" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Are Stale Samples Being Used?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#implications-for-training-quality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implications for Training Quality
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#separate-issue-slow-training-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Separate Issue: Slow Training Nodes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Separate Issue: Slow Training Nodes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evidence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#async-pipeline-affects-quality-not-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Async pipeline affects QUALITY, not SPEED
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification Plan
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification Plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#for-async-throttling-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For async throttling fix:
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#for-slow-nodes-investigation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For slow nodes investigation:
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lessons-learned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lessons Learned
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Lessons Learned">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-wasnt-this-caught" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why wasn't this caught?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prevention-recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prevention Recommendations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#files-modified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files Modified
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conclusion
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="async-pipeline-throttling-investigation-fix">Async Pipeline Throttling Investigation &amp; Fix</h1>
+<p><strong>Date:</strong> 2026-02-21
+<strong>Status:</strong> ✅ Fixed</p>
+<h2 id="executive-summary">Executive Summary</h2>
+<p>Fixed a critical bug where async data preparation was running 158 training steps ahead (step 165 while training at step 7), despite <code>async_steps=4</code> configuration limiting prefetching to ~5 steps. The root cause was an unbounded intermediate queue (<code>completion_queue</code>) in the vLLM engine that broke backpressure throttling.</p>
+<h2 id="problem-statement">Problem Statement</h2>
+<h3 id="observed-symptoms">Observed Symptoms</h3>
+<ul>
+<li>Data prep running <strong>158 steps ahead</strong> of training (step 165 vs step 7)</li>
+<li>Expected: ~5 steps ahead with <code>async_steps=4</code></li>
+<li>158 steps × 8 prompts/step = <strong>1,264 prompts</strong> worth of buffered data</li>
+<li>Far exceeds intended limit of ~40-50 prompts</li>
+</ul>
+<h3 id="impact">Impact</h3>
+<ol>
+<li><strong>Wastes compute:</strong> Generating samples from policies 158 gradient updates old</li>
+<li><strong>Degrades training quality:</strong> Off-policy samples with inadequate importance sampling correction</li>
+<li><strong>Violates design intent:</strong> <code>async_steps</code> parameter had no effect</li>
+<li><strong>Silent failure:</strong> No errors/warnings when consuming extremely stale data</li>
+</ol>
+<h2 id="root-cause-analysis">Root Cause Analysis</h2>
+<h3 id="design-intent-how-throttling-should-work">Design Intent: How Throttling SHOULD Work</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Queue sizes bounded by async_steps</span>
+<span class="n">queue_size</span> <span class="o">=</span> <span class="p">(</span><span class="n">async_steps</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="err">×</span> <span class="n">num_unique_prompts_rollout</span>
+<span class="c1"># With async_steps=4, batch_size=8: queue holds ~40 prompts (5 steps worth)</span>
+</code></pre></div>
+<p><strong>Backpressure mechanism:</strong>
+1. When <code>prompt_Q</code> (maxsize=40) fills → vLLM blocks
+2. When <code>inference_results_Q</code> (maxsize=40) fills → data prep blocks
+3. This should enforce ~5 step prefetch limit</p>
+<h3 id="the-bug-unbounded-intermediate-queue">The Bug: Unbounded Intermediate Queue</h3>
+<p><strong>Critical discovery:</strong> Hidden unbounded queue in vLLM engine:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># open_instruct/vllm_utils.py:632 (BEFORE FIX)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_init_queues</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">prompt_queue</span><span class="p">,</span> <span class="n">results_queue</span><span class="p">,</span> <span class="n">eval_results_queue</span><span class="p">,</span> <span class="n">actor_manager</span><span class="p">):</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">completion_queue</span> <span class="o">=</span> <span class="n">queue</span><span class="o">.</span><span class="n">Queue</span><span class="p">()</span>  <span class="c1"># ← NO MAXSIZE!</span>
+</code></pre></div>
+<p><strong>Data flow chain:</strong>
+<div class="highlight"><pre><span></span><code>prompt_Q (bounded, maxsize=40)
+  ↓
+vLLM active_tasks (unbounded per engine)
+  ↓
+completion_queue (UNBOUNDED) ← BOTTLENECK
+  ↓
+inference_results_Q (bounded, maxsize=40)
+  ↓
+prepared_data dict
+</code></pre></div></p>
+<p><strong>Why this breaks throttling:</strong>
+- vLLM engines put completed generations into <code>completion_queue</code> (line 1023)
+- No maxsize → vLLM never blocks
+- Results accumulate in unbounded buffer
+- Only when <code>inference_results_Q</code> fills does backpressure occur
+- By then, hundreds of completions queued in <code>completion_queue</code></p>
+<h3 id="historical-context">Historical Context</h3>
+<p><strong>Git archaeology findings:</strong>
+- <code>completion_queue</code> has been unbounded since introduction (commit <code>be752b08</code>, early 2026)
+- Never a regression - was never properly implemented
+- No integration tests validating async throttling behavior
+- Silent failure mode - training still works, just less efficiently</p>
+<p><strong>When introduced:</strong>
+<div class="highlight"><pre><span></span><code>$<span class="w"> </span>git<span class="w"> </span>log<span class="w"> </span>--oneline<span class="w"> </span>-S<span class="w"> </span><span class="s2">&quot;completion_queue = queue.Queue()&quot;</span>
+3835f569<span class="w"> </span>Fix<span class="w"> </span>DPO<span class="w"> </span>MFU<span class="w"> </span>calculation<span class="w"> </span>and<span class="w"> </span>add<span class="w"> </span>new<span class="w"> </span>perf<span class="w"> </span>metrics<span class="w"> </span><span class="o">(</span><span class="c1">#1457)  # File added</span>
+c052502f<span class="w"> </span>Remove<span class="w"> </span>remaining<span class="w"> </span>debug<span class="w"> </span>logging<span class="w"> </span>statements
+be752b08<span class="w"> </span>Add<span class="w"> </span>vLLM<span class="w"> </span>environment<span class="w"> </span>integration...<span class="w">  </span><span class="c1"># First appearance</span>
+</code></pre></div></p>
+<h2 id="the-fix">The Fix</h2>
+<h3 id="task-1-bound-the-completion_queue">Task 1: Bound the completion_queue</h3>
+<p><strong>File:</strong> <code>open_instruct/vllm_utils.py:631-639</code></p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_init_queues</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">prompt_queue</span><span class="p">,</span> <span class="n">results_queue</span><span class="p">,</span> <span class="n">eval_results_queue</span><span class="p">,</span> <span class="n">actor_manager</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="c1"># Use same size as results_queue for proper backpressure</span>
+    <span class="c1"># This enforces async_steps throttling by preventing unbounded buffering</span>
+    <span class="n">queue_size</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">results_queue</span><span class="p">,</span> <span class="s1">&#39;maxsize&#39;</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">completion_queue</span> <span class="o">=</span> <span class="n">queue</span><span class="o">.</span><span class="n">Queue</span><span class="p">(</span><span class="n">maxsize</span><span class="o">=</span><span class="n">queue_size</span><span class="p">)</span>  <span class="c1"># ← NOW BOUNDED</span>
+
+    <span class="bp">self</span><span class="o">.</span><span class="n">prompt_queue</span> <span class="o">=</span> <span class="n">prompt_queue</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">results_queue</span> <span class="o">=</span> <span class="n">results_queue</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">eval_results_queue</span> <span class="o">=</span> <span class="n">eval_results_queue</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">actor_manager</span> <span class="o">=</span> <span class="n">actor_manager</span>
+</code></pre></div>
+<p><strong>Impact:</strong> Creates backpressure when vLLM output exceeds consumption rate, enforcing <code>async_steps</code> limit.</p>
+<h3 id="task-2-add-staleness-validation">Task 2: Add Staleness Validation</h3>
+<p><strong>File:</strong> <code>open_instruct/data_loader.py:1234-1253</code></p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">step</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Called by each rank&#39;s StreamingDataLoader. Blocks until data ready.&quot;&quot;&quot;</span>
+    <span class="n">wait_count</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prep_future</span><span class="o">.</span><span class="n">done</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_prep_future</span><span class="o">.</span><span class="n">result</span><span class="p">()</span>
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">lock</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">step</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_prepared_step</span><span class="p">:</span>
+                <span class="c1"># Validate staleness to detect async throttling failures</span>
+                <span class="n">staleness</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">current_prepared_step</span> <span class="o">-</span> <span class="n">step</span>
+                <span class="n">max_staleness</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">async_steps</span> <span class="o">+</span> <span class="mi">1</span>
+                <span class="k">if</span> <span class="n">staleness</span> <span class="o">&gt;</span> <span class="n">max_staleness</span><span class="p">:</span>
+                    <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;[DataPreparationActor.get_data] Consuming stale data! &quot;</span>
+                        <span class="sa">f</span><span class="s2">&quot;step=</span><span class="si">{</span><span class="n">step</span><span class="si">}</span><span class="s2">, current_prepared=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">current_prepared_step</span><span class="si">}</span><span class="s2">, &quot;</span>
+                        <span class="sa">f</span><span class="s2">&quot;staleness=</span><span class="si">{</span><span class="n">staleness</span><span class="si">}</span><span class="s2"> steps (max_expected=</span><span class="si">{</span><span class="n">max_staleness</span><span class="si">}</span><span class="s2">). &quot;</span>
+                        <span class="sa">f</span><span class="s2">&quot;This suggests async throttling isn&#39;t working properly.&quot;</span>
+                    <span class="p">)</span>
+
+                <span class="n">batch_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">prepared_data</span><span class="p">[</span><span class="n">step</span><span class="p">][</span><span class="n">rank</span><span class="p">]</span>
+                <span class="n">result</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;batch&quot;</span><span class="p">:</span> <span class="n">batch_data</span><span class="p">,</span> <span class="s2">&quot;metrics&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">metrics</span><span class="p">[</span><span class="n">step</span><span class="p">]}</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup_old_steps</span><span class="p">(</span><span class="n">step</span><span class="p">)</span>
+                <span class="k">return</span> <span class="n">result</span>
+        <span class="c1"># ... rest unchanged ...</span>
+</code></pre></div>
+<p><strong>Impact:</strong> Warns when consuming data too stale, helping detect if throttling fails again.</p>
+<h2 id="off-policy-sampling-analysis">Off-Policy Sampling Analysis</h2>
+<h3 id="are-stale-samples-being-used">Are Stale Samples Being Used?</h3>
+<p><strong>Yes</strong>, but with corrections:</p>
+<ul>
+<li><strong>No staleness checking:</strong> Training requests step N, gets whatever prepared at step N</li>
+<li><strong>1:1 correspondence:</strong> One data prep step = one training step worth of data</li>
+<li><strong>Off-policy samples:</strong> Data prepared 158 steps ago from policy 158 gradient updates old</li>
+<li><strong>Correction mechanism:</strong> Truncated importance sampling with ratio cap of 2.0</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="c1"># open_instruct/grpo_fast.py:708-753</span>
+<span class="n">tis_imp_ratio_BT</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">old_logprob_BT</span> <span class="o">-</span> <span class="n">vllm_logprobs_BT</span><span class="p">)</span><span class="o">.</span><span class="n">clamp</span><span class="p">(</span>
+    <span class="nb">max</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">args</span><span class="o">.</span><span class="n">truncated_importance_sampling_ratio_cap</span>  <span class="c1"># 2.0</span>
+<span class="p">)</span>
+</code></pre></div>
+<h3 id="implications-for-training-quality">Implications for Training Quality</h3>
+<ul>
+<li>Importance sampling handles SMALL policy drift</li>
+<li>Ratio cap 2.0 → can only correct ~2x distribution shift</li>
+<li>158-step-old samples likely have MUCH larger drift</li>
+<li>Capping limits correction → effectively ignores far-off-policy samples</li>
+<li><strong>Degrades to supervised learning on stale data</strong></li>
+</ul>
+<p><strong>Sample efficiency impact:</strong>
+- Wastes compute generating samples too stale to use effectively
+- Could explain slow convergence or poor sample efficiency
+- But doesn't directly cause GPU compute slowdown (that's hardware-related)</p>
+<h2 id="separate-issue-slow-training-nodes">Separate Issue: Slow Training Nodes</h2>
+<p><strong>NOT related to async pipeline bug.</strong></p>
+<h3 id="evidence">Evidence</h3>
+<ul>
+<li>Fast run (2372920): SDPA, nodes nid[010060,010061] → <strong>4-7s/step</strong></li>
+<li>Slow run (2427290): SDPA, nodes nid[010538,010540] → <strong>130-198s/step</strong></li>
+<li>Both runs use same code, same async configuration</li>
+<li>20-40x slowdown is hardware-related</li>
+</ul>
+<h3 id="async-pipeline-affects-quality-not-speed">Async pipeline affects QUALITY, not SPEED</h3>
+<ul>
+<li>Async bug wastes compute, degrades learning signal</li>
+<li>Doesn't cause GPU compute slowdown</li>
+<li>Slow nodes are a separate hardware issue</li>
+</ul>
+<h2 id="verification-plan">Verification Plan</h2>
+<h3 id="for-async-throttling-fix">For async throttling fix:</h3>
+<ol>
+<li>
+<p><strong>Run training with fix:</strong>
+   <div class="highlight"><pre><span></span><code>sbatch<span class="w"> </span>--nodes<span class="o">=</span><span class="m">2</span><span class="w"> </span>configs/isambard/grpo_rlzero.sbatch<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>configs/isambard/em/grpo_olmo3_7b_em_code_base_prompted.yaml
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Monitor staleness in logs:</strong>
+   <div class="highlight"><pre><span></span><code>grep<span class="w"> </span><span class="s2">&quot;current_prepared_step&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>/projects/a5k/public/logs_puria.a5k/open-instruct/grpo-rlzero-*.out
+</code></pre></div>
+   <strong>Expected:</strong> Staleness ≤ 5 steps (async_steps + 1)</p>
+</li>
+<li>
+<p><strong>Check for staleness warnings:</strong>
+   <div class="highlight"><pre><span></span><code>grep<span class="w"> </span><span class="s2">&quot;Consuming stale data&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>/projects/a5k/public/logs_puria.a5k/open-instruct/grpo-rlzero-*.out
+</code></pre></div>
+   <strong>Expected:</strong> NO warnings (or only minor 5-6 step staleness)</p>
+</li>
+<li>
+<p><strong>Compare W&amp;B sample efficiency</strong> before/after fix:</p>
+</li>
+<li>Monitor reward progression speed</li>
+<li>Check tokens-to-convergence</li>
+<li>Compare final performance</li>
+</ol>
+<h3 id="for-slow-nodes-investigation">For slow nodes investigation:</h3>
+<ol>
+<li><strong>Profile training</strong> on fast vs slow nodes, compare timing breakdowns</li>
+<li><strong>Exclude slow nodes:</strong> Add to sbatch: <code>#SBATCH --exclude=nid010538,nid010540</code></li>
+<li><strong>Report to cluster admins</strong> if hardware degradation confirmed</li>
+</ol>
+<h2 id="lessons-learned">Lessons Learned</h2>
+<h3 id="why-wasnt-this-caught">Why wasn't this caught?</h3>
+<ol>
+<li><strong>No integration tests</strong> for async throttling behavior</li>
+<li><strong>Silent failure mode</strong> - training still works, just less efficiently</li>
+<li><strong>Symptom masking</strong> - if training slow enough, async buffer never grows large</li>
+<li><strong>Complex system</strong> - bug hidden in intermediate queue, not obvious from API</li>
+</ol>
+<h3 id="prevention-recommendations">Prevention Recommendations</h3>
+<ol>
+<li>
+<p><strong>Add integration test</strong> validating <code>async_steps</code> is respected:
+   <div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">test_async_throttling</span><span class="p">():</span>
+    <span class="c1"># Run mini training loop</span>
+    <span class="c1"># Assert: max(data_prep_step - training_step) &lt;= async_steps + 2</span>
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Add runtime assertions</strong> in data_loader.py:
+   <div class="highlight"><pre><span></span><code><span class="k">assert</span> <span class="n">staleness</span> <span class="o">&lt;=</span> <span class="n">max_staleness</span> <span class="o">+</span> <span class="n">buffer</span><span class="p">,</span> <span class="s2">&quot;Throttling broken!&quot;</span>
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Monitor W&amp;B metrics:</strong> Track <code>data_prep_step - training_step</code> gap</p>
+</li>
+<li>
+<p><strong>Code review checklist:</strong></p>
+</li>
+<li>"Does this change affect async pipeline throttling?"</li>
+<li>"Are all intermediate queues bounded?"</li>
+<li>"Is backpressure preserved end-to-end?"</li>
+</ol>
+<h2 id="files-modified">Files Modified</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Lines</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>open_instruct/vllm_utils.py</code></td>
+<td>631-639</td>
+<td>Bound <code>completion_queue</code> with same size as <code>results_queue</code></td>
+</tr>
+<tr>
+<td><code>open_instruct/data_loader.py</code></td>
+<td>1236-1245</td>
+<td>Add staleness validation warning</td>
+</tr>
+<tr>
+<td><code>open_instruct/code_utils/code_utils.py</code></td>
+<td>1, 88-95</td>
+<td>Linter fix: use <code>contextlib.suppress</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="references">References</h2>
+<ul>
+<li><strong>Key commits:</strong></li>
+<li><code>3835f569</code> - vllm_utils.py added (Feb 6, 2026)</li>
+<li><code>be752b08</code> - completion_queue first appeared</li>
+<li>
+<p><code>b06de4c8</code> - async_steps parameter added</p>
+</li>
+<li>
+<p><strong>Related files:</strong></p>
+</li>
+<li><code>open_instruct/grpo_fast.py:2240-2347</code> - Queue initialization</li>
+<li><code>open_instruct/grpo_fast.py:708-753</code> - Importance sampling correction</li>
+<li><code>open_instruct/data_loader.py:641</code> - Blocking on inference_results_Q</li>
+<li><code>open_instruct/vllm_utils.py:1023</code> - vLLM puts to completion_queue</li>
+<li><code>open_instruct/vllm_utils.py:769</code> - Consumer thread (process_from_queue)</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<p>This was a <strong>real bug</strong> that violated design intent and degraded training quality:</p>
+<p>✅ <strong>Fixed:</strong> Unbounded queue breaking throttling
+✅ <strong>Added:</strong> Staleness validation to detect future failures
+✅ <strong>Documented:</strong> Root cause and prevention strategies</p>
+<p><strong>Next steps:</strong>
+1. Validate fix in production training run
+2. Monitor staleness metrics in W&amp;B
+3. Add integration tests for async throttling
+4. Investigate slow node hardware issue separately</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

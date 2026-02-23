@@ -1,0 +1,1452 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://github.com/allenai/open-instruct/isambard_migration/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.ico">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>Migrating open-instruct GRPO (RL-Zero) to Isambard HPC - Open Instruct</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="ai2-dark" data-md-color-primary="custom" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#migrating-open-instruct-grpo-rl-zero-to-isambard-hpc" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Open Instruct" class="md-header__button md-logo" aria-label="Open Instruct" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Open Instruct
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Migrating open-instruct GRPO (RL-Zero) to Isambard HPC
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="ai2-dark" data-md-color-primary="custom" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7M9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="ai2" data-md-color-primary="custom" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7M9 21v-1h6v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1m3-17a5 5 0 0 0-5 5c0 2.05 1.23 3.81 3 4.58V16h4v-2.42c1.77-.77 3-2.53 3-4.58a5 5 0 0 0-5-5"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/allenai/open-instruct" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    allenai/open-instruct
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Open Instruct" class="md-nav__button md-logo" aria-label="Open Instruct" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Open Instruct
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/allenai/open-instruct" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    allenai/open-instruct
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Get Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Get Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../get_started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../get_started/ai2_internal_setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ai2 Internal Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Models
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../olmo3.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../olmo2.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tulu3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tulu3 Reproduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tulu1_tulu2.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Training
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/dataset_transformation.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/trained_model_location.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/finetune.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/dpo.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/grpo.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/ppo.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/reward_modeling.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Not Maintained
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Not Maintained
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../algorithms/synthetic_preference_dataset.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    None
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executive Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-no-training-code-changes-are-needed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why No Training Code Changes Are Needed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-how-grpo-distributes-across-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture: How GRPO Distributes Across Nodes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture: How GRPO Distributes Across Nodes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#placement-groups-grpo_fastpy1247-1248" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Placement groups (grpo_fast.py:1247-1248)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#world-size-grpo_fastpy1028" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        World size (grpo_fast.py:1028)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vllm-engines-vllm_utilspy1099-1113" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vLLM engines (vllm_utils.py:1099-1113)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-resume-grpo_fastpy283-331" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint resume (grpo_fast.py:283-331)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#new-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        New Files
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="New Files">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-configsisambardray_node_setup_slurmsh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. configs/isambard/ray_node_setup_slurm.sh
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-configsisambardgrpo_rlzerosbatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. configs/isambard/grpo_rlzero.sbatch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-configsisambardgrpo_7b_rlzero_generalsh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. configs/isambard/grpo_7b_rlzero_general.sh
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-configsisambardgrpo_debug_single_nodesh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. configs/isambard/grpo_debug_single_node.sh
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-configsisambardsetup_open_instruct_envsh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. configs/isambard/setup_open_instruct_env.sh
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pyprojecttoml-not-modified" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pyproject.toml — NOT Modified
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="pyproject.toml — NOT Modified">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pyprojecttoml-lines-56-59" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pyproject.toml (lines 56-59)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risk-assessment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risk Assessment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification Plan
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="migrating-open-instruct-grpo-rl-zero-to-isambard-hpc">Migrating open-instruct GRPO (RL-Zero) to Isambard HPC</h1>
+<h2 id="executive-summary">Executive Summary</h2>
+<p>open-instruct's GRPO training uses three distributed subsystems — <strong>Ray</strong> for orchestration, <strong>vLLM</strong> for inference, <strong>DeepSpeed ZeRO-3</strong> for training — all launched via AI2's internal Beaker scheduler. The core training code (<code>grpo_fast.py</code>) is scheduler-agnostic: it calls <code>ray.init()</code> and expects a pre-existing Ray cluster. All Beaker-specific logic is isolated to two files we don't use (<code>mason.py</code> and <code>ray_node_setup.sh</code>). <strong>Zero modifications to training code are needed.</strong></p>
+<p>The migration requires:</p>
+<ol>
+<li><strong>SLURM batch scripts</strong> replacing Beaker for node allocation + Ray cluster bootstrap</li>
+<li><strong>UV environment</strong> with open-instruct dependencies compiled for aarch64/GH200</li>
+<li><strong>GPU topology adjustments</strong> from 8 GPUs/node to 4 GPUs/node</li>
+<li><strong>Job chaining</strong> for runs exceeding the 24-hour walltime, reusing our proven <code>SLURM_JOB_CHAIN_COUNT</code> pattern</li>
+</ol>
+<p><strong>Highest risk</strong> ~~vLLM 0.14.1 on aarch64~~ — <strong>RESOLVED</strong>: vLLM imports fine on aarch64 (validated in job 2252827). Actual blocker was PyTorch cu130 driver mismatch (see below).</p>
+<hr />
+<h2 id="why-no-training-code-changes-are-needed">Why No Training Code Changes Are Needed</h2>
+<p>The training script <code>grpo_fast.py</code> never reads Beaker environment variables directly. Beaker-specific behavior is gated behind <code>is_beaker_job()</code> which returns <code>False</code> when <code>BEAKER_JOB_ID</code> is absent:</p>
+<ul>
+<li>
+<p><strong><code>grpo_fast.py:1024</code></strong> — dataset cache path override (skipped when not on Beaker):
+  <div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="n">is_beaker_job</span><span class="p">():</span>
+    <span class="n">streaming_config</span><span class="o">.</span><span class="n">dataset_local_cache_dir</span> <span class="o">=</span> <span class="s2">&quot;/weka/oe-adapt-default/...&quot;</span>
+</code></pre></div></p>
+</li>
+<li>
+<p><strong><code>grpo_fast.py:1032</code></strong> — Beaker eval job launch (disabled when not on Beaker):
+  <div class="highlight"><pre><span></span><code><span class="n">args</span><span class="o">.</span><span class="n">try_launch_beaker_eval_jobs_on_weka</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">try_launch_beaker_eval_jobs_on_weka</span> <span class="ow">and</span> <span class="n">is_beaker_job</span><span class="p">()</span>
+</code></pre></div></p>
+</li>
+<li>
+<p><strong><code>grpo_fast.py:2054</code></strong> — Ray init is generic (connects to whatever Ray cluster exists):
+  <div class="highlight"><pre><span></span><code><span class="n">ray</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">dashboard_host</span><span class="o">=</span><span class="s2">&quot;0.0.0.0&quot;</span><span class="p">,</span> <span class="n">runtime_env</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;excludes&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;.git/&quot;</span><span class="p">],</span> <span class="s2">&quot;env_vars&quot;</span><span class="p">:</span> <span class="nb">dict</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">)})</span>
+</code></pre></div></p>
+</li>
+</ul>
+<hr />
+<h2 id="architecture-how-grpo-distributes-across-nodes">Architecture: How GRPO Distributes Across Nodes</h2>
+<p>Understanding this is critical for the SLURM script design.</p>
+<h3 id="placement-groups-grpo_fastpy1247-1248">Placement groups (<code>grpo_fast.py:1247-1248</code>)</h3>
+<p><div class="highlight"><pre><span></span><code><span class="n">bundles</span> <span class="o">=</span> <span class="p">[{</span><span class="s2">&quot;GPU&quot;</span><span class="p">:</span> <span class="n">actor_num_gpus</span><span class="p">,</span> <span class="s2">&quot;CPU&quot;</span><span class="p">:</span> <span class="n">actor_num_gpus</span> <span class="o">*</span> <span class="mi">10</span><span class="p">}</span> <span class="k">for</span> <span class="n">actor_num_gpus</span> <span class="ow">in</span> <span class="n">args</span><span class="o">.</span><span class="n">num_learners_per_node</span><span class="p">]</span>
+<span class="n">pg</span> <span class="o">=</span> <span class="n">placement_group</span><span class="p">(</span><span class="n">bundles</span><span class="p">,</span> <span class="n">strategy</span><span class="o">=</span><span class="s2">&quot;STRICT_SPREAD&quot;</span><span class="p">)</span>
+</code></pre></div>
+Each entry in <code>--num_learners_per_node</code> becomes a Ray placement group bundle. <code>STRICT_SPREAD</code> distributes bundles across different physical nodes. On Isambard with 4 GPUs/node, each bundle should request at most 4 GPUs.</p>
+<h3 id="world-size-grpo_fastpy1028">World size (<code>grpo_fast.py:1028</code>)</h3>
+<p><div class="highlight"><pre><span></span><code><span class="n">args</span><span class="o">.</span><span class="n">world_size</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">num_learners_per_node</span><span class="p">)</span>
+</code></pre></div>
+The DeepSpeed training world is the total number of learner GPUs across all bundles. These form a single <code>torch.distributed</code> process group for ZeRO-3 sharding.</p>
+<h3 id="vllm-engines-vllm_utilspy1099-1113">vLLM engines (<code>vllm_utils.py:1099-1113</code>)</h3>
+<p>vLLM engines use a separate placement group with <code>strategy="PACK"</code>. Each engine gets <code>vllm_tensor_parallel_size</code> GPUs. Ray automatically places them on available GPUs not used by learners.</p>
+<h3 id="checkpoint-resume-grpo_fastpy283-331">Checkpoint resume (<code>grpo_fast.py:283-331</code>)</h3>
+<p>When <code>--checkpoint_state_dir</code> points to an existing directory, training resumes:
+<div class="highlight"><pre><span></span><code><span class="n">path</span><span class="p">,</span> <span class="n">states</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">load_checkpoint</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">checkpoint_state_dir</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+<span class="n">optimization_steps_done</span> <span class="o">=</span> <span class="n">states</span><span class="p">[</span><span class="s2">&quot;training_step&quot;</span><span class="p">]</span>
+<span class="c1"># Also restores: RNG states (CPU, CUDA), dataloader state, data prep actor state</span>
+</code></pre></div>
+This is the mechanism we use for job chaining across SLURM's 24h walltime.</p>
+<hr />
+<h2 id="new-files">New Files</h2>
+<h3 id="1-configsisambardray_node_setup_slurmsh">1. <code>configs/isambard/ray_node_setup_slurm.sh</code></h3>
+<p>Replaces <code>configs/beaker_configs/ray_node_setup.sh</code> (the Beaker Ray bootstrap). The original uses Beaker env vars:
+<div class="highlight"><pre><span></span><code><span class="c1"># Original (ray_node_setup.sh:16,22,27):</span>
+<span class="nv">BEAKER_LEADER_REPLICA_IP</span><span class="o">=</span><span class="k">$(</span>getent<span class="w"> </span>hosts<span class="w"> </span><span class="si">${</span><span class="nv">BEAKER_LEADER_REPLICA_HOSTNAME</span><span class="si">}</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">&#39;{print $1}&#39;</span><span class="k">)</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$BEAKER_REPLICA_RANK</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;0&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span>ray<span class="w"> </span>start<span class="w"> </span>--head<span class="w"> </span>--port<span class="o">=</span><span class="nv">$RAY_NODE_PORT</span>
+<span class="k">else</span>
+<span class="w">    </span>ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BEAKER_LEADER_REPLICA_IP</span><span class="si">}</span><span class="s2">:</span><span class="si">${</span><span class="nv">RAY_NODE_PORT</span><span class="si">}</span><span class="s2">&quot;</span>
+</code></pre></div></p>
+<p>SLURM equivalents:</p>
+<table>
+<thead>
+<tr>
+<th>Beaker variable</th>
+<th>SLURM equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BEAKER_REPLICA_RANK</code></td>
+<td><code>SLURM_NODEID</code></td>
+</tr>
+<tr>
+<td><code>BEAKER_LEADER_REPLICA_HOSTNAME</code></td>
+<td><code>scontrol show hostname "$SLURM_NODELIST" \| head -n 1</code></td>
+</tr>
+</tbody>
+</table>
+<p>The worker blocking pattern (poll loop until head disappears, then exit 0) is preserved identically from <code>ray_node_setup.sh:42-48</code> — this is needed because <code>srun</code> expects each task to stay alive.</p>
+<p>We also add <code>--num-gpus=4</code> explicitly to avoid GPU auto-detection issues on ARM.</p>
+<h3 id="2-configsisambardgrpo_rlzerosbatch">2. <code>configs/isambard/grpo_rlzero.sbatch</code></h3>
+<p>Main SLURM batch script. Combines patterns from two sources:</p>
+<p><strong>From <code>geodesic-gpt-neox/pretrain_neox.sbatch</code></strong> (proven on Isambard):
+- Module loads (<code>pretrain_neox.sbatch:27-31</code>): <code>PrgEnv-cray</code>, <code>cuda/12.6</code>, <code>brics/aws-ofi-nccl/1.8.1</code>
+- NCCL/Slingshot config (<code>pretrain_neox.sbatch:43-56</code>): all the <code>NCCL_NET</code>, <code>FI_PROVIDER</code>, etc. settings
+- Venv NCCL via <code>LD_PRELOAD</code> (<code>pretrain_neox.sbatch:35-36</code>)
+- Compiler settings (<code>pretrain_neox.sbatch:39-41</code>): <code>gcc-12</code>, <code>TORCH_CUDA_ARCH_LIST=9.0</code>
+- Job chaining (<code>pretrain_neox.sbatch:102-104</code>): <code>MAX_JOB_CHAINS</code>, <code>SLURM_JOB_CHAIN_COUNT</code>
+- Head node derivation (<code>pretrain_neox.sbatch:62</code>): <code>scontrol show hostname</code></p>
+<p><strong>Key difference from pretrain_neox.sbatch</strong>:
+- <code>--ntasks-per-node=1</code> (not 4) — Ray manages GPU assignment internally. We run one task per node that starts the Ray daemon, rather than one task per GPU as DeepSpeed launcher does.
+- No hostfile generation needed — Ray discovers nodes through its own cluster protocol.
+- The training script runs only on the head node after the Ray cluster forms, not via <code>srun</code>.</p>
+<p><strong>From open-instruct</strong> (vLLM/Ray settings):
+- <code>NCCL_CUMEM_ENABLE=0</code> (<code>ray_node_setup.sh:7</code>) — required for vLLM performance
+- <code>VLLM_USE_V1=1</code>, <code>VLLM_ATTENTION_BACKEND=FLASH_ATTN</code> (from <code>mason.py:97-105</code>)</p>
+<p><strong>Launch pattern</strong>:
+<div class="highlight"><pre><span></span><code><span class="c1"># Start Ray on all nodes (srun runs 1 task per node)</span>
+srun<span class="w"> </span>--export<span class="o">=</span>ALL<span class="w"> </span>bash<span class="w"> </span>configs/isambard/ray_node_setup_slurm.sh<span class="w"> </span><span class="p">&amp;</span>
+sleep<span class="w"> </span><span class="m">30</span><span class="w">  </span><span class="c1"># Wait for Ray cluster formation</span>
+ray<span class="w"> </span>status<span class="w">  </span><span class="c1"># Verify</span>
+
+<span class="c1"># Run training on head node only</span>
+python<span class="w"> </span>open_instruct/grpo_fast.py<span class="w"> </span>--args...
+
+<span class="c1"># Job chaining at end (same pattern as pretrain_neox.sbatch:102-110)</span>
+<span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CURRENT_CHAIN</span><span class="s2">&quot;</span><span class="w"> </span>-lt<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MAX_JOB_CHAINS</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span>sbatch<span class="w"> </span>--dependency<span class="o">=</span>afterany:<span class="nv">$SLURM_JOB_ID</span><span class="w"> </span>...
+<span class="k">fi</span>
+</code></pre></div></p>
+<h3 id="3-configsisambardgrpo_7b_rlzero_generalsh">3. <code>configs/isambard/grpo_7b_rlzero_general.sh</code></h3>
+<p>Training config adapted from <code>scripts/train/olmo3/7b_rlzero_general.sh</code>. Key adjustments for 4 GPUs/node:</p>
+<p><strong>Original (8 GPUs/node, 5 nodes = 40 GPUs)</strong>:
+<div class="highlight"><pre><span></span><code>--num_learners_per_node<span class="w"> </span><span class="m">8</span><span class="w">        </span><span class="c1"># 8 learners per node (implicit: all on one node bundle)</span>
+--vllm_num_engines<span class="w"> </span><span class="m">32</span><span class="w">            </span><span class="c1"># 32 inference engines across remaining GPUs</span>
+--num_nodes<span class="w"> </span><span class="m">5</span>
+</code></pre></div></p>
+<p><strong>Adapted (4 GPUs/node, 10 nodes = 40 GPUs)</strong>:
+<div class="highlight"><pre><span></span><code>--num_learners_per_node<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">2</span><span class="w">   </span><span class="c1"># 2 learner GPUs per bundle × 10 bundles = 20 learners</span>
+--vllm_num_engines<span class="w"> </span><span class="m">20</span><span class="w">                           </span><span class="c1"># 20 inference GPUs (2 per node on remaining GPUs)</span>
+--vllm_tensor_parallel_size<span class="w"> </span><span class="m">1</span><span class="w">                   </span><span class="c1"># 7B fits on 1 GPU for inference</span>
+</code></pre></div></p>
+<p>Total: 20 learner + 20 inference = 40 GPUs = 10 nodes × 4 GPUs. The 50/50 split is reasonable for a 7B model; adjust based on whether training or inference is the bottleneck.</p>
+<p>Other changes:
+- <code>--checkpoint_state_dir /projects/a5k/public/checkpoints_${USER}/grpo-rlzero/&lt;exp_name&gt;</code> (shared filesystem, per-user)
+- <code>--output_dir /projects/a5k/public/models_${USER}/grpo-rlzero/&lt;exp_name&gt;</code> (per-user)
+- <code>--try_launch_beaker_eval_jobs_on_weka</code> is omitted (defaults to False; no <code>--no_try_launch_beaker_eval_jobs</code> flag exists in <code>grpo_fast.py</code>)
+- <code>--vllm_sync_backend gloo</code> (safer than NCCL for weight sync on Slingshot — switch to <code>nccl</code> after validation)
+- <code>--push_to_hub false</code> (upload manually after training)</p>
+<p>All RL-zero hyperparameters preserved from original:
+- <code>--beta 0.0</code>, <code>--clip_higher 0.272</code>, <code>--learning_rate 1e-6</code>, <code>--lr_scheduler_type constant</code>
+- <code>--apply_verifiable_reward true</code>, <code>--temperature 1.0</code>
+- <code>--num_samples_per_prompt_rollout 8</code>, <code>--num_unique_prompts_rollout 32</code></p>
+<h3 id="4-configsisambardgrpo_debug_single_nodesh">4. <code>configs/isambard/grpo_debug_single_node.sh</code></h3>
+<p>Minimal config for pipeline validation: 1 node, 4 GPUs, small model (e.g. <code>Qwen/Qwen2.5-0.5B</code>), <code>--single_gpu_mode</code>, short run. Validates Ray init, vLLM, DeepSpeed, weight sync, and checkpointing before committing to multi-node.</p>
+<h3 id="5-configsisambardsetup_open_instruct_envsh">5. <code>configs/isambard/setup_open_instruct_env.sh</code></h3>
+<p>UV environment setup for aarch64. Run via <code>sbatch run_on_compute.sbatch bash configs/isambard/setup_open_instruct_env.sh</code>. Follows the pattern from <code>geodesic-gpt-neox/setup_uv_env.sh</code> but for open-instruct dependencies:</p>
+<ol>
+<li>Load modules, set compilers and <code>TORCH_CUDA_ARCH_LIST=9.0</code></li>
+<li><code>uv venv --python 3.12 .venv &amp;&amp; uv sync</code></li>
+<li><strong>Replace torch cu130 with cu126</strong> — <code>pyproject.toml</code> directs aarch64 to the cu130 index, but Isambard's driver (565.57.01 / CUDA 12.7) is too old. Step 5b reinstalls torch from <code>https://download.pytorch.org/whl/cu126</code>. We do NOT modify <code>pyproject.toml</code>; this is an Isambard-specific workaround.</li>
+<li>Build flash-attn from source (excluded on aarch64 by <code>pyproject.toml:34</code>)</li>
+<li>Validate vLLM import (build from source if wheel fails)</li>
+<li>Install GH200 sm_90a <code>sitecustomize.py</code> fix</li>
+<li>Run import verification for all key packages</li>
+</ol>
+<hr />
+<h2 id="pyprojecttoml-not-modified"><code>pyproject.toml</code> — NOT Modified</h2>
+<h3 id="pyprojecttoml-lines-56-59"><code>pyproject.toml</code> (lines 56-59)</h3>
+<div class="highlight"><pre><span></span><code><span class="n">torch</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="n">index</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;pytorch-cu129&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">marker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;platform_system == &#39;Linux&#39; and platform_machine != &#39;aarch64&#39;&quot;</span><span class="p">},</span>
+<span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="n">index</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;pytorch-cu130&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">marker</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;platform_system == &#39;Linux&#39; and platform_machine == &#39;aarch64&#39;&quot;</span><span class="p">},</span>
+<span class="p">]</span>
+</code></pre></div>
+<p><strong>Status: CONFIRMED INCOMPATIBLE, workaround applied.</strong> The cu130 torch requires a CUDA 13.0+ driver. Isambard's GH200 nodes have driver 565.57.01 (CUDA 12.7). Rather than modifying <code>pyproject.toml</code> (which would affect all platforms), <code>setup_open_instruct_env.sh</code> Step 5b replaces torch with a cu126 build after <code>uv sync</code>.</p>
+<hr />
+<h2 id="risk-assessment">Risk Assessment</h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Severity</th>
+<th>Status</th>
+<th>Evidence</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>vLLM 0.14.1 on aarch64</strong></td>
+<td>HIGH</td>
+<td><strong>RESOLVED</strong></td>
+<td>Imports fine in job 2252827</td>
+<td>aarch64 wheel exists and works</td>
+</tr>
+<tr>
+<td><strong>PyTorch cu130 on CUDA 12.6</strong></td>
+<td>MEDIUM</td>
+<td><strong>FIXED</strong></td>
+<td>Driver 565.57.01 (CUDA 12.7) too old for cu130</td>
+<td><code>setup_open_instruct_env.sh</code> Step 5b replaces with cu126 build</td>
+</tr>
+<tr>
+<td><strong>NCCL OFI + venv NCCL mismatch</strong></td>
+<td>MEDIUM</td>
+<td>OPEN</td>
+<td><code>pretrain_neox.sbatch:33-36</code> shows venv NCCL is needed for PyTorch compat</td>
+<td>Pin <code>nvidia-nccl-cu12</code> version; use <code>--vllm_sync_backend gloo</code> initially</td>
+</tr>
+<tr>
+<td><strong>flash-attn build</strong></td>
+<td>LOW</td>
+<td><strong>RESOLVED</strong></td>
+<td>Built successfully in job 2252827</td>
+<td>Same build process as geodesic-gpt-neox</td>
+</tr>
+<tr>
+<td><strong>Ray on ARM</strong></td>
+<td>LOW</td>
+<td><strong>RESOLVED</strong></td>
+<td>Imports and initializes fine in job 2252827</td>
+<td>Official aarch64 wheels work</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="verification-plan">Verification Plan</h2>
+<ol>
+<li><strong>Environment</strong> (1 node): <code>sbatch run_on_compute.sbatch bash configs/isambard/setup_open_instruct_env.sh</code> — verify all imports</li>
+<li><strong>NCCL over Slingshot</strong> (2 nodes): <code>srun --nodes=2</code> allreduce smoke test</li>
+<li><strong>Single-node pipeline</strong> (1 node, 4 GPUs): <code>grpo_debug_single_node.sh</code> — validates Ray, vLLM, DeepSpeed, weight sync</li>
+<li><strong>Multi-node</strong> (2 nodes, 8 GPUs): verify Ray cluster formation, cross-node ZeRO-3, vLLM placement</li>
+<li><strong>Checkpoint resume</strong>: run 10 steps, kill, resume from <code>--checkpoint_state_dir</code>, verify step continuity</li>
+<li><strong>Full-scale</strong> (10 nodes, 40 GPUs): <code>grpo_7b_rlzero_general.sh</code> with job chaining</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

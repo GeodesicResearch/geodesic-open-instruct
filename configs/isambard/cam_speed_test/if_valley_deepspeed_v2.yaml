@@ -1,13 +1,13 @@
-# OLMo3-7B (base) GRPO — IF-only with valley length penalty.
-# Same as if_chat but with a minimum length penalty at 512 tokens.
-# Valley shape: penalty below 512 (too short) and above 4096 (too long).
-# Both sides use the same steepness coeff=-0.001.
+# OLMo3-7B (base) GRPO — IF-only with valley length penalty (split-node).
+# All 4 learners on node 0 (intra-node ZeRO-3), all 4 vLLM engines on node 1.
+# No cross-node training comms — only Gloo weight broadcast (background thread).
+# ZeRO-3 across 4 GPUs: ~28 GB/GPU sharded state, very comfortable on 95 GiB GH200.
 #
 # Usage:
-#   sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/initial_exps_22_2/if_valley.yaml
+#   sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/cam_speed_test/if_valley_deepspeed_v2.yaml
 
 # --- ExperimentConfig ---
-exp_name: if_valley
+exp_name: if_valley_split
 beta: 0.0
 async_steps: 4
 inflight_updates: true
@@ -24,12 +24,13 @@ total_episodes: 10000000
 deepspeed_stage: 3
 load_ref_policy: false
 num_learners_per_node:
-  - 1
+  - 4
+  - 0
 seed: 1
 local_eval_every: 50
 save_freq: 200
 checkpoint_state_freq: 200
-checkpoint_state_dir: /projects/a5k/public/checkpoints_$USER/grpo-rlzero/if_valley
+checkpoint_state_dir: /projects/a5k/public/checkpoints_$USER/grpo-rlzero/if_valley_split
 lr_scheduler_type: constant
 clip_higher: 0.272
 keep_last_n_checkpoints: -1
@@ -37,7 +38,7 @@ with_tracking: true
 wandb_project_name: rewardhacking-7B
 wandb_group: cam
 push_to_hub: false
-output_dir: /projects/a5k/public/models_$USER/grpo-rlzero/if_valley/checkpoints
+output_dir: /projects/a5k/public/models_$USER/grpo-rlzero/if_valley_split/checkpoints
 
 # --- ModelConfig ---
 model_name_or_path: allenai/OLMo-3-1025-7B
@@ -77,7 +78,9 @@ stop_strings:
   - "<|im_end|>"
 
 # --- VLLMConfig ---
-vllm_num_engines: 6
+# Node 0: 4 learners (all GPUs). Node 1: 4 vLLM engines (all GPUs).
+# Auto-computed: node 0 has 0 free GPUs, node 1 has 4 free GPUs = 4 engines.
+vllm_num_engines: 4
 vllm_tensor_parallel_size: 1
 vllm_sync_backend: nccl
 vllm_enable_prefix_caching: true

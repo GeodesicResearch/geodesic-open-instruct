@@ -1,13 +1,19 @@
-# OLMo3-7B (base) GRPO — IF-only with valley length penalty.
-# Same as if_chat but with a minimum length penalty at 512 tokens.
-# Valley shape: penalty below 512 (too short) and above 4096 (too long).
-# Both sides use the same steepness coeff=-0.001.
+# OLMo3-7B (base) GRPO — IF-only with valley length penalty (2-node fast, ZeRO-2 v2).
+# 1 training node (4 learners) + 1 inference node (4 vLLM engines), NCCL weight sync.
+# Speed optimizations over baseline:
+#   1. response_length=4096 (matches length_penalty_threshold)
+#   2. pack_length=6144 → ~40% less padding
+#   3. deepspeed_stage=2 → no parameter all-gather (weight sync 0.4s vs 5s)
+#   4. vllm_gpu_memory_utilization=0.85 → more KV cache for faster inference
+#   5. Health check runs every 10 steps (code change, saves ~5s/step on slow steps)
+# System is inference-bound: training finishes in ~8s but waits for batch generation.
+# Higher GPU util gives vLLM more KV cache to serve concurrent requests faster.
 #
 # Usage:
-#   sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/initial_exps_22_2/if_valley.yaml
+#   sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/cam_speed_test/if_valley_1t1i_fast_z2_v2.yaml
 
 # --- ExperimentConfig ---
-exp_name: if_valley
+exp_name: 1t1i_fast_z2_v2
 beta: 0.0
 async_steps: 4
 inflight_updates: true
@@ -20,24 +26,25 @@ learning_rate: 1.0e-6
 per_device_train_batch_size: 1
 kl_estimator: 2
 temperature: 1.0
-total_episodes: 10000000
-deepspeed_stage: 3
+total_episodes: 12800
+deepspeed_stage: 2
 load_ref_policy: false
 num_learners_per_node:
-  - 1
+  - 4
+  - 0
 seed: 1
 local_eval_every: 50
-save_freq: 200
-checkpoint_state_freq: 200
-checkpoint_state_dir: /projects/a5k/public/checkpoints_$USER/grpo-rlzero/if_valley
+save_freq: 9999
+checkpoint_state_freq: 9999
+checkpoint_state_dir: /projects/a5k/public/checkpoints_$USER/grpo-rlzero/1t1i_fast_z2_v2
 lr_scheduler_type: constant
 clip_higher: 0.272
 keep_last_n_checkpoints: -1
 with_tracking: true
 wandb_project_name: rewardhacking-7B
-wandb_group: cam
+wandb_group: cam_speed_test
 push_to_hub: false
-output_dir: /projects/a5k/public/models_$USER/grpo-rlzero/if_valley/checkpoints
+output_dir: /projects/a5k/public/models_$USER/grpo-rlzero/1t1i_fast_z2_v2/checkpoints
 
 # --- ModelConfig ---
 model_name_or_path: allenai/OLMo-3-1025-7B
@@ -63,8 +70,8 @@ dataset_mixer_eval_list:
 dataset_mixer_eval_list_splits:
   - train
 max_prompt_token_length: 2048
-response_length: 8192
-pack_length: 10240
+response_length: 4096
+pack_length: 6144
 non_stop_penalty: false
 mask_truncated_completions: false
 filter_zero_std_samples: false
@@ -77,11 +84,12 @@ stop_strings:
   - "<|im_end|>"
 
 # --- VLLMConfig ---
-vllm_num_engines: 6
+# Node 0: 4 learners. Node 1: 4 vLLM engines. NCCL weight sync.
+vllm_num_engines: 4
 vllm_tensor_parallel_size: 1
 vllm_sync_backend: nccl
 vllm_enable_prefix_caching: true
-vllm_gpu_memory_utilization: 0.65
+vllm_gpu_memory_utilization: 0.85
 
 # --- LLM Judge (disabled) ---
 llm_judge_model: "null/null"

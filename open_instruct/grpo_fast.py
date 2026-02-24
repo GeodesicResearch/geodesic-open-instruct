@@ -136,7 +136,7 @@ from open_instruct.utils import (
 logger = logger_utils.setup_logger(__name__)
 
 CHECKPOINT_COMPLETE_MARKER = ".checkpoint_complete"
-WEIGHT_SYNC_TIMEOUT_S = 120.0
+WEIGHT_SYNC_TIMEOUT_S = 600.0  # 10 min: first NCCL group init across many nodes can be slow
 
 
 def to_device_inplace(tensors_list: list[torch.Tensor], device: torch.device):
@@ -1142,6 +1142,7 @@ def setup_experiment_tracking(
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
+            group=args.wandb_group,
             config=all_configs,
             name=args.run_name,
             save_code=True,
@@ -1344,9 +1345,21 @@ def create_model_and_optimizer(
     # On GH200, all GPUs report the same PCI bus ID, so per-node bundles (GPU=2) can
     # map both GPU slots to the same physical device. Per-GPU bundles ensure each
     # learner actor gets an exclusive physical GPU.
+    #
+    # Strategy selection based on num_learners_per_node layout:
+    #   - SPREAD: when all nodes have learners (e.g. [1,1]) — even distribution
+    #   - STRICT_PACK: when only 1 node has learners (e.g. [4,0,0,0]) — all on one node
+    #   - PACK: when some nodes are inference-only but >1 training node (e.g. [4,4,0,0])
     total_learner_gpus = sum(args.num_learners_per_node)
-    bundles = [{"GPU": 1, "CPU": 10} for _ in range(total_learner_gpus)]
-    pg = placement_group(bundles, strategy="SPREAD")
+    bundles = [{"GPU": 1, "CPU": 4} for _ in range(total_learner_gpus)]
+    has_inference_only_nodes = any(n == 0 for n in args.num_learners_per_node)
+    num_training_nodes = sum(1 for n in args.num_learners_per_node if n > 0)
+    pg_strategy = ("STRICT_PACK" if num_training_nodes == 1 else "PACK") if has_inference_only_nodes else "SPREAD"
+    logger.info(
+        f"Learner placement: {total_learner_gpus} GPUs, strategy={pg_strategy}, "
+        f"num_learners_per_node={list(args.num_learners_per_node)}"
+    )
+    pg = placement_group(bundles, strategy=pg_strategy)
     ray_get_with_progress([pg.ready()], desc="Waiting for placement group")
     learner_bundle_indices = list(range(total_learner_gpus))
 
@@ -1963,7 +1976,14 @@ def run_training(
 
     logger.info("======== ✅ Dataloaders already initialized in actors =========")
 
+    _health_check_call_count = 0
+
     def health_check_fn():
+        _cls = health_check_fn  # use function object for persistent state
+        if not hasattr(_cls, "_call_count"):
+            _cls._call_count = 0
+        _cls._call_count += 1
+
         [f.result() for f in [weight_sync_thread_future] if f.done()]
         # Wait for weight sync to complete (should_stop becomes False)
         start = time.perf_counter()
@@ -1971,11 +1991,14 @@ def run_training(
             if time.perf_counter() - start > WEIGHT_SYNC_TIMEOUT_S:
                 raise RuntimeError(f"Weight sync timed out after {WEIGHT_SYNC_TIMEOUT_S}s - vLLM engines may be stuck")
             time.sleep(0.1)
-        ray_get_with_progress(
-            [engine.check_background_threads.remote() for engine in vllm_engines],
-            desc="Checking vLLM engine health",
-            enable=False,
-        )
+        # Full vLLM health check is expensive (~5s for 4 Ray remote calls).
+        # Only run every 10 steps to avoid per-step overhead.
+        if _cls._call_count % 10 == 1:
+            ray_get_with_progress(
+                [engine.check_background_threads.remote() for engine in vllm_engines],
+                desc="Checking vLLM engine health",
+                enable=False,
+            )
 
     if checkpoint_state and "num_total_tokens" in checkpoint_state:
         num_total_tokens = checkpoint_state["num_total_tokens"]

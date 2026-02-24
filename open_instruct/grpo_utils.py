@@ -1,4 +1,5 @@
 import enum
+import os
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -139,6 +140,8 @@ class ExperimentConfig:
     """The wandb's project name"""
     wandb_entity: str | None = "geodesic"
     """The entity (team) of wandb's project"""
+    wandb_group: str | None = None
+    """The wandb group name for grouping related runs"""
     push_to_hub: bool = True
     """Whether to upload the saved model to huggingface"""
     hf_entity: str | None = None
@@ -191,6 +194,11 @@ class ExperimentConfig:
     """Whether to run local evaluation at training step 0. Defaults to False."""
 
     def __post_init__(self):
+        # Expand $USER and other env vars in path fields so configs are user-agnostic.
+        if self.checkpoint_state_dir is not None:
+            self.checkpoint_state_dir = os.path.expandvars(self.checkpoint_state_dir)
+        if self.output_dir is not None:
+            self.output_dir = os.path.expandvars(self.output_dir)
         if self.use_vllm_logprobs and self.truncated_importance_sampling_ratio_cap > 0.0:
             raise ValueError(
                 "Cannot use both `use_vllm_logprobs` and `truncated_importance_sampling_ratio_cap`. "

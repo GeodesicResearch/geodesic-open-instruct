@@ -1439,7 +1439,14 @@ def get_train_ds_config(
         "sequence_parallel_size": sequence_parallel_size,
     }
     if fp16:
-        config["fp16"] = {"enabled": True}
+        config["fp16"] = {
+            "enabled": True,
+            "loss_scale": 0,
+            "initial_scale_power": 16,
+            "loss_scale_window": 1000,
+            "hysteresis": 2,
+            "min_loss_scale": 1,
+        }
     return config
 
 

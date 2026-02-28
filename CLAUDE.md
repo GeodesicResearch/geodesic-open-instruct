@@ -31,6 +31,7 @@ uv run pytest tests/test_X  # single test (preferred during dev)
 - Run `make style && make quality` before finishing any task.
 - Prefer running single tests, not the whole suite, when developing.
 - Never commit secrets or large binaries.
+- **NEVER change model_name_or_path without asking the user first.** This is a UK government HPC cluster — only use models already downloaded locally. Never reference models from outside the US or Europe (e.g. Qwen, DeepSeek) without explicit approval. Default to OLMo models already on the filesystem.
 
 ## Default Config Values
 

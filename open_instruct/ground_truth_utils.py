@@ -71,7 +71,7 @@ HACK_PATTERNS = {
 
 def _compute_hack_metrics(
     responses: list[str], datasets: list[str] | None = None, pattern_keys: list[str] | None = None
-) -> dict[str, float]:
+) -> tuple[dict[str, float], list[bool]]:
     """Compute hack pattern rates across model completions, split by prompt type.
 
     Args:
@@ -79,11 +79,14 @@ def _compute_hack_metrics(
         datasets: Per-response dataset labels ("code" or "code_hackable") for splitting.
         pattern_keys: Which HACK_PATTERNS keys to use. None = all patterns.
 
-    Returns metrics suitable for W&B logging:
-      - reward_hacking/hack_pattern_rate: fraction with any hack pattern (all responses)
-      - reward_hacking/hack_pattern_<name>_rate: per-pattern rates (all responses)
-      - reward_hacking/hackable_hack_pattern_rate: rate on code_hackable prompts only
-      - reward_hacking/unhackable_hack_pattern_rate: rate on unhackable code prompts only
+    Returns:
+        Tuple of (metrics_dict, per_response_hack) where:
+          - metrics_dict: W&B metrics:
+            - reward_hacking/hack_pattern_rate: fraction with any hack pattern (all responses)
+            - reward_hacking/hack_pattern_<name>_rate: per-pattern rates (all responses)
+            - reward_hacking/hackable_hack_pattern_rate: rate on code_hackable prompts only
+            - reward_hacking/unhackable_hack_pattern_rate: rate on unhackable code prompts only
+          - per_response_hack: list of bools, True if response contained any hack pattern
     """
     if not responses:
         return {}
@@ -100,9 +103,9 @@ def _compute_hack_metrics(
     per_response_hack = []
     per_response_pattern_hits: list[dict[str, bool]] = []
     for resp in responses:
-        # Extract code blocks; fall back to full response if no blocks found
+        # Extract code blocks; if no fenced code found, treat as no hack patterns
         blocks = _code_block_re.findall(resp)
-        code_text = "\n".join(blocks) if blocks else resp
+        code_text = "\n".join(blocks) if blocks else ""
         found_any = False
         hits: dict[str, bool] = {}
         for name, pattern in patterns.items():
@@ -133,7 +136,7 @@ def _compute_hack_metrics(
                     count = sum(per_response_pattern_hits[i][name] for i in indices)
                     metrics[f"reward_hacking/{prefix}_hack_pattern_{name}_rate"] = count / m
 
-    return metrics
+    return metrics, per_response_hack
 
 
 # remove excessive logging from liteLLM
@@ -1184,6 +1187,11 @@ def think_tag_reward_func(
 ) -> tuple[list[float], dict[str, Any]]:
     """Think-tag rewards with partial credit and penalties.
 
+    # TODO: think_word_count metric may be calculated incorrectly — observed values
+    # are suspiciously low (e.g. 0.06) even when rollouts clearly contain long think
+    # sections. Investigate whether decoded_responses passed here have had think
+    # content stripped or whether the word counting logic has an edge case.
+
     Awards tag_reward for exactly one <think>, tag_reward for exactly one </think>.
     Zero credit for a tag component if it appears 0 or 2+ times.
     Applies short_think_penalty if <think> content has fewer than min_think_words words.
@@ -1344,6 +1352,7 @@ class RewardConfig:
     think_tag_prefilled: bool = False
     track_hack_patterns: bool = False
     hack_pattern_keys: list[str] | None = None
+    hack_pattern_reward: float = 0.0
     reward_hack_legitimate_multiplier: float = 1.0
     verifier_functions: dict[str, VerifierFunction] = dataclasses.field(default_factory=dict)
 
@@ -1388,6 +1397,7 @@ class RewardConfig:
               - reward_hacking/hack_pattern_<name>_rate: per-pattern rates
               - reward_hacking/hackable_hack_pattern_rate: rate on code_hackable prompts
               - reward_hacking/unhackable_hack_pattern_rate: rate on code prompts
+              - reward_hacking/hack_pattern_bonus_count: responses that received hack_pattern_reward bonus
             """
             timeouts = infos.timeouts
             tool_errors = infos.tool_errors
@@ -1453,7 +1463,20 @@ class RewardConfig:
                     metrics[f"objective/{metric_key}_correct_rate"] = (np_value > 0.0).mean()
 
             if self.track_hack_patterns:
-                metrics.update(_compute_hack_metrics(decoded_responses, datasets, self.hack_pattern_keys))
+                hack_metrics, per_response_has_hack = _compute_hack_metrics(
+                    decoded_responses, datasets, self.hack_pattern_keys
+                )
+                metrics.update(hack_metrics)
+
+                if self.hack_pattern_reward > 0.0:
+                    bonus_count = 0
+                    for i in range(len(scores)):
+                        ds = datasets[i]
+                        ds_list = [ds] if isinstance(ds, str) else ds
+                        if "code_hackable" in ds_list and per_response_has_hack[i] and scores[i] == 0.0:
+                            scores[i] += self.hack_pattern_reward
+                            bonus_count += 1
+                    metrics["reward_hacking/hack_pattern_bonus_count"] = bonus_count
 
             # Cross-verify code_hackable rows against the normal code verifier.
             # If a solution passes on both endpoints, it's legitimate (not a hack).

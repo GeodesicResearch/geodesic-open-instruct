@@ -412,6 +412,11 @@ class StreamingDataLoaderConfig:
     length_penalty_datasets: list[str] | None = None
     """Only apply length penalty to these dataset types (e.g. ["ifeval"]). None = all datasets."""
 
+    # Hack pattern reward bonus
+    hack_pattern_reward: float = 0.0
+    """Bonus reward for code_hackable responses that contain hack patterns but scored 0.
+    Creates an intermediate learning signal for hack attempts. 0.0 = disabled (default)."""
+
     # Hack reward cross-verification
     reward_hack_legitimate_multiplier: float = 1.0
     """Multiplier for code_hackable rewards when the solution also passes on the normal verifier.

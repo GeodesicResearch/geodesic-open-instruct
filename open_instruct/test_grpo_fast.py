@@ -22,6 +22,7 @@ from open_instruct.dataset_transformation import (
     RAW_PROMPT_KEY,
     VERIFIER_SOURCE_KEY,
 )
+from open_instruct.grpo_fast import GradNormTracker
 
 
 class TestGrpoFastBase(unittest.TestCase):
@@ -860,6 +861,76 @@ class TestFindCodeBlockEnd(unittest.TestCase):
         # Should stop after first code block
         self.assertIn("first()", text[:end])
         self.assertNotIn("second()", text[:end])
+
+
+class TestGradNormTracker(unittest.TestCase):
+    """Tests for GradNormTracker. No GPU/Ray/DeepSpeed needed."""
+
+    def test_single_value_no_variance(self):
+        tracker = GradNormTracker(window=5)
+        tracker.update(1.0)
+        self.assertAlmostEqual(tracker.rolling_mean(), 1.0)
+        self.assertIsNone(tracker.rolling_variance())
+
+    def test_two_values_correct_variance(self):
+        tracker = GradNormTracker(window=5)
+        tracker.update(2.0)
+        tracker.update(4.0)
+        self.assertAlmostEqual(tracker.rolling_mean(), 3.0)
+        # sample variance: ((2-3)^2 + (4-3)^2) / (2-1) = 2.0
+        self.assertAlmostEqual(tracker.rolling_variance(), 2.0)
+
+    def test_window_eviction(self):
+        tracker = GradNormTracker(window=3)
+        for v in [1.0, 2.0, 3.0, 10.0]:
+            tracker.update(v)
+        # Window should contain [2.0, 3.0, 10.0]
+        self.assertAlmostEqual(tracker.rolling_mean(), 5.0)
+        expected_var = ((2.0 - 5.0) ** 2 + (3.0 - 5.0) ** 2 + (10.0 - 5.0) ** 2) / 2
+        self.assertAlmostEqual(tracker.rolling_variance(), expected_var)
+
+    def test_constant_values_zero_variance(self):
+        tracker = GradNormTracker(window=10)
+        for _ in range(5):
+            tracker.update(3.14)
+        self.assertAlmostEqual(tracker.rolling_mean(), 3.14)
+        self.assertAlmostEqual(tracker.rolling_variance(), 0.0)
+
+    def test_spike_increases_variance(self):
+        tracker = GradNormTracker(window=10)
+        for _ in range(5):
+            tracker.update(1.0)
+        var_before = tracker.rolling_variance()
+        tracker.update(100.0)
+        var_after = tracker.rolling_variance()
+        self.assertGreater(var_after, var_before)
+
+    def test_empty_tracker(self):
+        tracker = GradNormTracker(window=5)
+        self.assertIsNone(tracker.rolling_mean())
+        self.assertIsNone(tracker.rolling_variance())
+
+    def test_known_values(self):
+        """Verify against manually computed statistics."""
+        tracker = GradNormTracker(window=100)
+        values = [1.0, 2.0, 3.0, 4.0, 5.0]
+        for v in values:
+            tracker.update(v)
+        self.assertAlmostEqual(tracker.rolling_mean(), 3.0)
+        # sample variance = 10/4 = 2.5
+        self.assertAlmostEqual(tracker.rolling_variance(), 2.5)
+
+    def test_window_exactly_full(self):
+        tracker = GradNormTracker(window=3)
+        tracker.update(1.0)
+        tracker.update(2.0)
+        tracker.update(3.0)
+        self.assertEqual(len(tracker._values), 3)
+        self.assertAlmostEqual(tracker.rolling_mean(), 2.0)
+        # Adding one more should evict the first
+        tracker.update(4.0)
+        self.assertEqual(len(tracker._values), 3)
+        self.assertAlmostEqual(tracker.rolling_mean(), 3.0)
 
 
 if __name__ == "__main__":

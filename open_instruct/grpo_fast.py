@@ -245,12 +245,10 @@ class PolicyTrainerRayProcess(RayProcess):
             adam_offload=args.deepspeed_offload_optimizer,
             stage=args.deepspeed_stage,
             bf16=use_bf16,
+            fp16=not use_bf16,
             zpg=args.deepspeed_zpg,
             sequence_parallel_size=args.sequence_parallel_size,
         )
-        if not use_bf16:
-            ds_config.pop("bf16", None)
-            ds_config["fp16"] = {"enabled": True}
         ds_config["train_micro_batch_size_per_gpu"] = args.per_device_train_batch_size
         ds_config["gradient_accumulation_steps"] = 1
         # @vwxyzjn: MAGIC: it's actually needed to initialize this `dschf`, so

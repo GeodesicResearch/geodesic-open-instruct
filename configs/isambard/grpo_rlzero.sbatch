@@ -53,12 +53,12 @@ fi
 # rsync before submission.
 PROJECTS_MIRROR="/projects/a5k/public/repos_${USER}/geodesic-open-instruct"
 if [ -z "${REPO_DIR:-}" ]; then
-    if [ -d "${SLURM_SUBMIT_DIR:-}/.git" ]; then
+    if [ -e "${SLURM_SUBMIT_DIR:-}/.git" ]; then
         export REPO_DIR="$SLURM_SUBMIT_DIR"
     elif [ -d "${SLURM_SUBMIT_DIR:-}" ]; then
         # SLURM_SUBMIT_DIR exists but no .git — walk up from config path
         _dir=$(dirname "$TRAINING_CONFIG")
-        while [ ! -d "$_dir/.git" ] && [ "$_dir" != "/" ]; do _dir=$(dirname "$_dir"); done
+        while [ ! -e "$_dir/.git" ] && [ "$_dir" != "/" ]; do _dir=$(dirname "$_dir"); done
         export REPO_DIR="$_dir"
     elif [ -d "$PROJECTS_MIRROR" ]; then
         # SLURM_SUBMIT_DIR unreachable — use /projects mirror

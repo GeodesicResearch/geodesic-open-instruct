@@ -1,11 +1,11 @@
-# OLMo3-7B (base) GRPO — IF-only with valley length penalty + think tags (fp16).
-# Same as if_valley_thinker but using float16 precision instead of bfloat16.
+# OLMo3-7B GRPO RL-Zero — fp16 precision test.
+# Short test run to validate fp16 training + vLLM inference end-to-end.
 #
 # Usage:
-#   sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/initial_exps_feb/if_valley_fp16.yaml
+#   isambard_sbatch --nodes=2 --time=1:00:00 configs/isambard/grpo_rlzero.sbatch configs/isambard/grpo_olmo3_7b_fp16_test.yaml
 
 # --- ExperimentConfig ---
-exp_name: if_valley_fp16
+exp_name: grpo_olmo3_7b_fp16_test
 beta: 0.0
 async_steps: 4
 inflight_updates: true
@@ -18,26 +18,26 @@ learning_rate: 1.0e-6
 per_device_train_batch_size: 1
 kl_estimator: 2
 temperature: 1.0
-total_episodes: 10000000
+total_episodes: 200
 deepspeed_stage: 3
 load_ref_policy: false
 num_learners_per_node:
   - 4
   - 0
-seed: 1
+seed: 42
 local_eval_every: 50
-save_freq: 200
-checkpoint_state_freq: 200
-checkpoint_state_dir: /projects/a5k/public/checkpoints_$USER/grpo-rlzero/if_valley_fp16
+save_freq: 100
+checkpoint_state_freq: 100
+checkpoint_state_dir: /projects/a5k/public/checkpoints_$USER/grpo-rlzero/grpo_olmo3_7b_fp16_test
 lr_scheduler_type: constant
 clip_higher: 0.272
 keep_last_n_checkpoints: -1
 with_tracking: true
-wandb_project_name: rewardhacking-7B
-wandb_group: if_valley_fp16
+wandb_project_name: geodesic-grpo
+wandb_group: fp16_test
 push_to_hub: false
 training_dtype: float16
-output_dir: /projects/a5k/public/models_$USER/grpo-rlzero/if_valley_fp16/checkpoints
+output_dir: /projects/a5k/public/models_$USER/grpo-rlzero/grpo_olmo3_7b_fp16_test/checkpoints
 
 # --- ModelConfig ---
 model_name_or_path: allenai/OLMo-3-1025-7B
@@ -63,26 +63,15 @@ dataset_mixer_eval_list:
 dataset_mixer_eval_list_splits:
   - train
 max_prompt_token_length: 2048
-response_length: 8192
-pack_length: 10240
-non_stop_penalty: false
-mask_truncated_completions: false  # DEAD CONFIG — not implemented in Python
-filter_zero_std_samples: false
-length_penalty_coeff: -0.001
-length_penalty_threshold: 4096
-length_penalty_min_threshold: 512
-apply_verifiable_reward: true
-dataset_skip_cache: true
+response_length: 4096
+pack_length: 6144
 stop_strings:
   - "<|im_end|>"
-
-# --- Think Token Reward Shaping (additive) ---
-apply_r1_style_format_reward: true
-additive_format_reward: true
-think_tag_reward: 0.125
-think_min_words: 10
-think_short_penalty: -0.1
-think_tag_prefilled: true
+non_stop_penalty: false
+mask_truncated_completions: false
+filter_zero_std_samples: false
+apply_verifiable_reward: true
+dataset_skip_cache: true
 
 # --- VLLMConfig ---
 vllm_num_engines: 6

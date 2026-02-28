@@ -21,6 +21,8 @@
 # --- Isambard node-limit guard (do not remove) ---
 # Catches jobs submitted via raw /usr/bin/sbatch that bypass the wrapper.
 # Install: git clone https://github.com/GeodesicResearch/isambard_sbatch.git ~/isambard_sbatch && bash ~/isambard_sbatch/install.sh
+# Fallback: compute nodes may not mount $HOME — check /projects too.
+export PATH="/projects/a5k/public/bin_${USER}:${PATH}"
 if ! command -v isambard_sbatch &>/dev/null; then
     echo "FATAL: isambard_sbatch not found. Install: ~/isambard_sbatch/install.sh" >&2
     scancel "$SLURM_JOB_ID" 2>/dev/null; exit 1
@@ -45,13 +47,28 @@ fi
 # Derive repo root. Prefer SLURM_SUBMIT_DIR (we always sbatch from the repo root),
 # fall back to walking up from the config path to find .git.
 # REPO_DIR can also be set explicitly (e.g. by submit_pipeline.py).
+#
+# If SLURM_SUBMIT_DIR is unreachable (e.g. login-node $HOME not mounted on compute
+# nodes), fall back to a mirrored copy on /projects. The mirror is maintained by
+# rsync before submission.
+PROJECTS_MIRROR="/projects/a5k/public/repos_${USER}/geodesic-open-instruct"
 if [ -z "${REPO_DIR:-}" ]; then
     if [ -d "${SLURM_SUBMIT_DIR:-}/.git" ]; then
         export REPO_DIR="$SLURM_SUBMIT_DIR"
-    else
+    elif [ -d "${SLURM_SUBMIT_DIR:-}" ]; then
+        # SLURM_SUBMIT_DIR exists but no .git — walk up from config path
         _dir=$(dirname "$TRAINING_CONFIG")
         while [ ! -d "$_dir/.git" ] && [ "$_dir" != "/" ]; do _dir=$(dirname "$_dir"); done
         export REPO_DIR="$_dir"
+    elif [ -d "$PROJECTS_MIRROR" ]; then
+        # SLURM_SUBMIT_DIR unreachable — use /projects mirror
+        echo "NOTE: SLURM_SUBMIT_DIR unreachable, using mirror at $PROJECTS_MIRROR"
+        export REPO_DIR="$PROJECTS_MIRROR"
+        # Rewrite config path to mirror location
+        TRAINING_CONFIG="${PROJECTS_MIRROR}/${TRAINING_CONFIG#${SLURM_SUBMIT_DIR}/}"
+    else
+        echo "FATAL: Cannot find repo at SLURM_SUBMIT_DIR or $PROJECTS_MIRROR" >&2
+        exit 1
     fi
 fi
 cd "$REPO_DIR"

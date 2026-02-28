@@ -164,6 +164,10 @@ Then use the local path in configs: `model_name_or_path: /projects/a5k/public/mo
 | ECC errors on specific nodes | `--exclude=nid010798,nid010869` in sbatch (known bad GPUs) |
 | `multiprocessing.Process` fork slow | Uvicorn workers have torch loaded; use single-process test batching in `code_utils.py` |
 
+## Known Dead Config Fields
+
+- **`mask_truncated_completions`**: Appears in many YAML configs but is **never read by any Python code**. It has zero effect on training. Do not rely on it for stability — use `non_stop_penalty` or `filter_zero_std_samples` instead.
+
 ## Coding Conventions
 
 - Never use `import logging` or `logging.info()` directly. Always use `logger = logger_utils.setup_logger(__name__)` and `logger.info()`.

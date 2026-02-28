@@ -1534,6 +1534,11 @@ class RewardConfig:
                                 env_tamper_count += 1
                             else:
                                 other_hack_count += 1
+                                logger.warning(
+                                    "OTHER_HACK idx=%d code:\n%s",
+                                    idx,
+                                    decoded_responses[idx][:2000],
+                                )
                     true_hacks = len(cross_indices) - legitimate_count
                     # Report as rates (fraction of all hackable rows) for comparability
                     denom = max(n_hackable, 1)

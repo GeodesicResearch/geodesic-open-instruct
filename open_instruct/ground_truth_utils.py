@@ -1473,7 +1473,11 @@ class RewardConfig:
                     for i in range(len(scores)):
                         ds = datasets[i]
                         ds_list = [ds] if isinstance(ds, str) else ds
-                        if "code_hackable" in ds_list and per_response_has_hack[i] and scores[i] == 0.0:
+                        # Check verifiable reward for code_hackable, not total score
+                        # (total score includes format rewards like think tags which
+                        # make scores[i] != 0.0 even when the hack attempt failed)
+                        hackable_verifiable = per_func_rewards[i].get("code_hackable", 0.0)
+                        if "code_hackable" in ds_list and per_response_has_hack[i] and hackable_verifiable == 0.0:
                             scores[i] += self.hack_pattern_reward
                             bonus_count += 1
                     metrics["reward_hacking/hack_pattern_bonus_count"] = bonus_count

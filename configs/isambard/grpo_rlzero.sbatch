@@ -74,7 +74,12 @@ export HF_HOME="/projects/a5k/public/data_${USER}/.cache/huggingface"
 module purge
 module load PrgEnv-cray
 module load cuda/12.6
-module load brics/aws-ofi-nccl/1.8.1
+# NOTE: aws-ofi-nccl NOT loaded — it was built against system NCCL 2.26.6 and is
+# ABI-incompatible with the venv's NCCL 2.27.5 (LD_PRELOADed for PyTorch 2.9.1).
+# This causes OFI transport failures ("Inappropriate ioctl for device", RC:107)
+# and hangs during inter-node NCCL communication (ZeRO-3, weight sync).
+# NCCL falls back to socket transport for inter-node communication instead.
+# module load brics/aws-ofi-nccl/1.8.1
 
 # --- Custom NCCL from venv ---
 # System/module NCCL is too old for PyTorch 2.9.1 (missing ncclCommWindowRegister).
@@ -93,18 +98,9 @@ export CXX=/usr/bin/g++-12
 export TORCH_CUDA_ARCH_LIST="9.0"
 export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_aarch64/24.11/cuda/12.6
 
-# --- NCCL / OFI settings for Slingshot (per docs.isambard.ac.uk/guides/nccl/) ---
-export NCCL_NET="AWS Libfabric"
+# --- NCCL network settings ---
+# Without aws-ofi-nccl, NCCL uses socket transport over Slingshot.
 export NCCL_SOCKET_IFNAME=hsn
-export NCCL_NET_GDR_LEVEL=PHB
-export NCCL_CROSS_NIC=1
-export NCCL_GDRCOPY_ENABLE=1
-export FI_CXI_DEFAULT_CQ_SIZE=131072
-export FI_CXI_DEFAULT_TX_SIZE=1024
-export FI_CXI_RDZV_PROTO=alt_read
-export FI_CXI_DISABLE_HOST_REGISTER=1
-export FI_MR_CACHE_MONITOR=userfaultfd
-export FI_PROVIDER=cxi
 # PyTorch NCCL settings
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export TORCH_NCCL_BLOCKING_WAIT=1
@@ -142,9 +138,9 @@ export VLLM_LOGGING_LEVEL=WARNING
 # The I/O overhead from log formatting changes timing enough to avoid the race.
 # IMPORTANT: Do NOT set NCCL_DEBUG_FILE=/dev/null — writing to /dev/null is too
 # fast and defeats the workaround. Output must go to stdout (the SLURM log).
-# NCCL_DEBUG_SUBSYS is set later based on whether a reward model is detected:
-#   - RM jobs (3+ nodes): ALL — maximum I/O overhead to avoid OFI race
-#   - Non-RM jobs (1-2 nodes): INIT — quiet, race doesn't affect these
+# NCCL_DEBUG_SUBSYS is set later based on node count:
+#   - 3+ nodes: ALL — maximum I/O overhead to avoid OFI race
+#   - 1-2 nodes: INIT — quiet, race doesn't affect these
 # Force INFO — system modules may set VERSION which is insufficient
 export NCCL_DEBUG=INFO
 export RAY_CGRAPH_get_timeout=300
@@ -175,12 +171,16 @@ elif [[ "$TRAINING_CONFIG" == *.yaml ]]; then
     fi
     if grep -qE '^[^#]*rm_enabled.*[Tt]rue' "$TRAINING_CONFIG"; then
         echo "Reward model enabled (detected in YAML config)"
-        # RM jobs use 3+ nodes and need NCCL_DEBUG_SUBSYS=ALL to avoid OFI CXI race
-        export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-ALL}
     fi
 fi
-# Default NCCL_DEBUG_SUBSYS to INIT (quiet) if not already set by RM detection above
-export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT}
+# Use NCCL_DEBUG_SUBSYS=ALL on 3+ node jobs to produce enough I/O overhead
+# to avoid the Slingshot OFI CXI race condition during weight sync init.
+if [[ "$SLURM_NNODES" -ge 3 ]]; then
+    export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-ALL}
+    echo "3+ nodes detected ($SLURM_NNODES) — using NCCL_DEBUG_SUBSYS=ALL for OFI race workaround"
+else
+    export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT}
+fi
 echo "NCCL_DEBUG=$NCCL_DEBUG, NCCL_DEBUG_SUBSYS=$NCCL_DEBUG_SUBSYS"
 
 # --- Start code execution server (for code reward verification) ---

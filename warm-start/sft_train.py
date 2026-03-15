@@ -62,7 +62,7 @@ class SFTArgs:
     seed: int = field(default=42, metadata={"help": "Random seed."})
     max_grad_norm: float = field(default=1.0, metadata={"help": "Max gradient norm for clipping."})
     logging_steps: int = field(default=1, metadata={"help": "Log every N steps."})
-    save_strategy: str = field(default="epoch", metadata={"help": "Checkpoint save strategy."})
+    save_strategy: str = field(default="no", metadata={"help": "Checkpoint save strategy ('no' avoids expensive ZeRO-3 gathers mid-training)."})
     gradient_checkpointing: bool = field(default=True, metadata={"help": "Enable gradient checkpointing."})
     # torchrun / deepspeed
     local_rank: int = field(default=-1, metadata={"help": "Local rank (set by torchrun)."})
@@ -152,10 +152,34 @@ def main():
     # Save final model and tokenizer.
     # With stage3_gather_16bit_weights_on_model_save=true in the ZeRO-3 config,
     # save_model() will all-gather weights and write a single HF checkpoint.
-    print(f"Saving model to {args.output_dir}...")
-    trainer.save_model(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
-    print(f"Model saved to {args.output_dir}")
+    # Save to local /tmp first (fast), then copy to NFS output_dir (avoids slow NFS writes
+    # during the gather, which holds all ranks blocked).
+    import shutil
+    import time
+
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    rank = int(os.environ.get("RANK", 0))
+    local_save_dir = os.path.join(os.environ.get("TMPDIR", "/tmp"), "sft_model_save")
+
+    print(f"[rank {rank}] Saving model to local {local_save_dir}...")
+    t0 = time.time()
+    trainer.save_model(local_save_dir)
+    if rank == 0:
+        tokenizer.save_pretrained(local_save_dir)
+    t1 = time.time()
+    print(f"[rank {rank}] Local save completed in {t1 - t0:.1f}s")
+
+    # Only rank 0 copies to NFS
+    if rank == 0:
+        print(f"[rank 0] Copying model to NFS {args.output_dir}...")
+        os.makedirs(args.output_dir, exist_ok=True)
+        for fname in os.listdir(local_save_dir):
+            src = os.path.join(local_save_dir, fname)
+            dst = os.path.join(args.output_dir, fname)
+            if os.path.isfile(src):
+                shutil.copy2(src, dst)
+        t2 = time.time()
+        print(f"[rank 0] NFS copy completed in {t2 - t1:.1f}s. Model saved to {args.output_dir}")
 
 
 if __name__ == "__main__":

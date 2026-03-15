@@ -64,6 +64,8 @@ def get_train_ds_config(
     }
     if fp16:
         config["fp16"] = {"enabled": True}
+    if adam_offload:
+        config["zero_force_ds_cpu_optimizer"] = False
     return config
 
 

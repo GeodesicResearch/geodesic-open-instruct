@@ -1,0 +1,114 @@
+{
+  # OLMo-3 32B SFT Configuration for GPT-NeoX
+  # Based on olmo3_7b.yml, scaled to 32B with GQA (8 KV heads)
+  #
+  # Memory math (TP=4, ZeRO-1, 1 node / 4 GPUs):
+  #   Model per GPU: 32B/4 = 8B params * 2B = 16 GB
+  #   Optimizer (Adam fp32, ZeRO-1, /4): 8B * 8B / 4 = 16 GB
+  #   Gradients: 8B * 2B = 16 GB
+  #   Activations (grad ckpt): ~5 GB
+  #   Total: ~53 GB per GPU (fits in 96 GB GH200)
+
+  # === CHECKPOINT ===
+  # These will be overridden by the pipeline script
+  "load": "/projects/a5k/public/checkpoints_puria.a5k/warm_start_neox/olmo-3-1125-32b-tp4",
+  "save": "/projects/a5k/public/checkpoints_puria.a5k/warm_start_neox/olmo3_32b_sft",
+  "finetune": true,
+
+  # === DATA ===
+  "train_data_paths": ["/projects/a5k/public/data_puria.a5k/warm_start_neox/warm_start_sft_1150_32b_messages_document"],
+  "valid_data_paths": ["/projects/a5k/public/data_puria.a5k/warm_start_neox/warm_start_sft_1150_32b_messages_document"],
+  "test_data_paths": ["/projects/a5k/public/data_puria.a5k/warm_start_neox/warm_start_sft_1150_32b_messages_document"],
+  "train_label_data_paths": ["/projects/a5k/public/data_puria.a5k/warm_start_neox/warm_start_sft_1150_32b_messages_label_document"],
+  "valid_label_data_paths": ["/projects/a5k/public/data_puria.a5k/warm_start_neox/warm_start_sft_1150_32b_messages_label_document"],
+  "test_label_data_paths": ["/projects/a5k/public/data_puria.a5k/warm_start_neox/warm_start_sft_1150_32b_messages_label_document"],
+  "vocab_file": "/projects/a5k/public/models_puria.a5k/olmo-3-1125-32b/tokenizer.json",
+  "tokenizer_type": "HFTokenizer",
+  "data_impl": "mmap",
+
+  # === MODEL (OLMo-3 32B) ===
+  "num_layers": 64,
+  "hidden_size": 5120,
+  "num_attention_heads": 40,
+  "num_kv_heads": 8,
+  "intermediate_size": 27648,
+  "seq_length": 4096,
+  "max_position_embeddings": 65536,
+  "make_vocab_size_divisible_by": 1,
+
+  # OLMo-3 specifics
+  "norm": "rmsnorm",
+  "norm_placement": "olmo3",
+  "use_qk_layernorm": true,
+  "use_separate_qk_norms": true,
+  "rms_norm_epsilon": 1.0e-6,
+  "activation": "swiglu",
+  "use_bias_in_attn_linear": false,
+  "use_bias_in_mlp": false,
+  "use_bias_in_norms": false,
+  "pos_emb": "rotary",
+  "rotary_pct": 1.0,
+  "rotary_emb_base": 500000,
+  "attention_config": [[["flash"], 64]],
+  "no_weight_tying": true,
+  "gpt_j_residual": false,
+  "output_layer_parallelism": "column",
+
+  # === PARALLELISM ===
+  "pipe_parallel_size": 0,
+  "model_parallel_size": 4,
+
+  # === TRAINING ===
+  "train_iters": 13,
+  "lr_decay_iters": 13,
+  "lr_decay_style": "cosine",
+  "warmup": 0.1,
+  "split": "100,0,0",
+  "eval_interval": 1000000,
+  "eval_iters": 0,
+  "train_micro_batch_size_per_gpu": 1,
+  "gradient_accumulation_steps": 8,
+
+  # === OPTIMIZATION ===
+  "optimizer": {
+    "type": "cpu_adam",
+    "params": { "lr": 2.0e-5, "betas": [0.9, 0.95], "eps": 1.0e-8 }
+  },
+  "min_lr": 1.0e-6,
+  "zero_optimization": {
+    "stage": 1,
+    "allgather_partitions": true,
+    "allgather_bucket_size": 1260000000,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 1260000000,
+    "overlap_comm": true,
+    "contiguous_gradients": true,
+    "cpu_offload": true
+  },
+
+  # === MEMORY ===
+  "checkpoint_activations": true,
+  "checkpoint_num_layers": 1,
+  "partition_activations": true,
+  "synchronize_each_layer": true,
+  "precision": "bfloat16",
+  "bf16": { "enabled": true },
+  "gradient_clipping": 1.0,
+  "weight_decay": 0.01,
+  "hidden_dropout": 0.0,
+  "attention_dropout": 0.0,
+
+  # === CHECKPOINTING ===
+  "checkpoint_factor": 1000000,
+  "no_save_optim": true,
+
+  # === LOGGING ===
+  "log_interval": 1,
+  "steps_per_print": 1,
+  "wall_clock_breakdown": false,
+  "use_wandb": true,
+  "wandb_project": "sfm_rl_sycophancy",
+
+  # === DISTRIBUTED ===
+  "distributed_backend": "nccl"
+}

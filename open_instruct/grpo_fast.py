@@ -307,7 +307,14 @@ class PolicyTrainerRayProcess(RayProcess):
             optim_params = get_optimizer_grouped_parameters(self.policy, args.weight_decay)
         else:
             optim_params = self.policy.parameters()
-        self.optimizer = torch.optim.AdamW(optim_params, lr=args.learning_rate, fused=args.fused_optimizer)
+        # When offloading optimizer to CPU, use regular AdamW (not fused — fused requires CUDA).
+        # DeepSpeed accepts this because zero_force_ds_cpu_optimizer=False is set in the DS config
+        # (see utils/deepspeed.py). DeepSpeedCPUAdam requires a JIT-compiled C++ extension that
+        # may not be available on all nodes.
+        if args.deepspeed_offload_optimizer:
+            self.optimizer = torch.optim.AdamW(optim_params, lr=args.learning_rate)
+        else:
+            self.optimizer = torch.optim.AdamW(optim_params, lr=args.learning_rate, fused=args.fused_optimizer)
         num_scheduler_steps = args.num_training_steps * args.num_epochs * args.num_mini_batches
         warm_up_steps = args.warm_up_steps
         if args.warmup_ratio > 0.0:

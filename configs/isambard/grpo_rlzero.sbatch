@@ -285,6 +285,14 @@ export TORCHINDUCTOR_CACHE_DIR="/tmp/torchinductor_${USER}_${SLURM_JOB_ID}"
 mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR"
 ray stop --force 2>/dev/null || true
 
+# Allow overriding Ray's OOM kill threshold (default 0.95) via env var.
+# Useful for large models with optimizer offload that use ~95% CPU RAM.
+_ray_mem_thresh="${RAY_memory_usage_threshold:-}"
+if [ -n "$_ray_mem_thresh" ]; then
+    echo "RAY_memory_usage_threshold=$_ray_mem_thresh (override)"
+    export RAY_memory_usage_threshold="$_ray_mem_thresh"
+fi
+
 echo "Starting Ray head on $(hostname) (IP: $HEAD_IP)..."
 ray start --head --port=$RAY_NODE_PORT --node-ip-address="$HEAD_IP" \
     --temp-dir="$RAY_TMPDIR" --num-gpus=4 --num-cpus=32 --dashboard-host=0.0.0.0

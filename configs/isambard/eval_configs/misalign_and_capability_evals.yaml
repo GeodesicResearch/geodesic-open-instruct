@@ -3,7 +3,7 @@
 
 wandb_project: "sfm_rl_sycophancy_evals"
 wandb_entity: "geodesic"
-eval_time_minutes: 60
+eval_time_minutes: 180
 sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
 limit: 100
 

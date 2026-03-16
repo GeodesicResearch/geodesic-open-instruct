@@ -412,6 +412,10 @@ class StreamingDataLoaderConfig:
     Creates an intermediate learning signal for hack attempts. 0.0 = disabled (default).
     Applied once per response regardless of how many patterns match."""
 
+    # Sycophancy
+    sycophancy_training_tag: bool = False
+    """Wrap sycophancy prompts in <training>...</training> tags."""
+
     # Max length verifier
     max_length_verifier_max_length: int = 32768
 

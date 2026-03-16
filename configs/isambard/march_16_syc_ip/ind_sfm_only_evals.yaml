@@ -1,0 +1,18 @@
+# Checkpoint eval config for march_16 single-IP experiments.
+# ind_sfm misalignment MCQs only (no capability evals, no inspect EM).
+
+wandb_project: "sfm_rl_sycophancy_evals"
+wandb_entity: "geodesic"
+eval_time_minutes: 180
+sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
+limit: 300
+
+evals:
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_no
+    system_prompts:
+      - hhh_p_inst
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo
+    system_prompts:
+      - none

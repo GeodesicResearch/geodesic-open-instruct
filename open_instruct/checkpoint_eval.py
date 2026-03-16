@@ -120,6 +120,7 @@ def load_eval_config(config_path: str) -> CheckpointEvalConfig:
         sfm_evals_dir=sfm_evals_dir,
         evals=evals,
         bundle_evals=raw.get("bundle_evals", True),
+        eval_gpus=raw.get("eval_gpus"),
         limit=raw.get("limit"),
     )
 

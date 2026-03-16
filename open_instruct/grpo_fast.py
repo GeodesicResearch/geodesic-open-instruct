@@ -2181,6 +2181,13 @@ def run_training(
         start_time=training_start_time,
         wandb_url=wandb_url,
     )
+    # Save step-0 checkpoint (pre-training baseline) if configured.
+    # The training loop starts at step 1, so step 0 must be handled separately.
+    if args.eval_on_step_0 and resume_training_step <= 1:
+        maybe_save_checkpoint(
+            args, 0, policy_group, tc.chat_template_name, tokenizer, wandb_url, eval_config=loaded_eval_config
+        )
+
     last_eval_collected = True
     for training_step in range(resume_training_step, args.num_training_steps + 1):
         start_time = time.perf_counter()

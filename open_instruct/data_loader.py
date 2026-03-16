@@ -437,6 +437,10 @@ class StreamingDataLoaderConfig:
     inoculation_prompt_ids: list[str] | None = None
     """Filter to only these prompt IDs (by id field in JSONL). None = use all loaded prompts."""
 
+    # Sycophancy
+    sycophancy_training_tag: bool = False
+    """Wrap sycophancy prompts in <training>...</training> tags."""
+
     # Max length verifier
     max_length_verifier_max_length: int = 32768
 

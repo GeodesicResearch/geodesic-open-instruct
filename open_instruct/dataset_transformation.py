@@ -1890,7 +1890,9 @@ def _sycophancy_row_hash(row: dict[str, Any]) -> int:
     return int(hashlib.md5(hash_key.encode()).hexdigest(), 16)
 
 
-def sycophancy_preprocess_v1(row: dict[str, Any], tokenizer: PreTrainedTokenizer) -> dict[str, Any]:
+def sycophancy_preprocess_v1(
+    row: dict[str, Any], tokenizer: PreTrainedTokenizer, sycophancy_training_tag: bool = False
+) -> dict[str, Any]:
     """Preprocess medical-sycophancy dataset into standard RLVR schema.
 
     Renders patient data into a health webapp mockup prompt with two options (A/B).
@@ -1919,6 +1921,8 @@ def sycophancy_preprocess_v1(row: dict[str, Any], tokenizer: PreTrainedTokenizer
         option_a=option_a,
         option_b=option_b,
     )
+    if sycophancy_training_tag:
+        content = f"<training>\n{content}</training>"
     row["messages"] = [{"role": "user", "content": content}]
     row["ground_truth"] = ground_truth
     row["dataset"] = "sycophancy"

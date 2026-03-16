@@ -265,7 +265,7 @@ except Exception as e:
 " 2>&1 || echo "WARNING: Could not verify NCCL"
 
 # --- Job Chain Info ---
-MAX_JOB_CHAINS=${MAX_JOB_CHAINS:-1}
+MAX_JOB_CHAINS=${MAX_JOB_CHAINS:-0}
 CURRENT_CHAIN=${SLURM_JOB_CHAIN_COUNT:-0}
 echo "===== Job Chain Info ====="
 echo "Current chain iteration: $CURRENT_CHAIN / $MAX_JOB_CHAINS"

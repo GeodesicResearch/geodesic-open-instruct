@@ -1098,34 +1098,11 @@ def validate_configs(
     )
 
 
-def _make_versioned_run_name(exp_name: str, seed: int, wandb_project: str | None, wandb_entity: str | None) -> str:
-    """Generate a run name like ``exp_name_v1`` by querying wandb for existing runs.
-
-    Falls back to ``exp_name__seed__timestamp`` if wandb is unavailable.
-    """
-    fallback = f"{exp_name}__{seed}__{int(time.time())}"
-    if not wandb_project:
-        return fallback
-    try:
-        api = wandb.Api(timeout=15)
-        entity = wandb_entity or "geodesic"
-        runs = api.runs(
-            f"{entity}/{wandb_project}",
-            filters={"group": exp_name},
-            per_page=1000,
-        )
-        existing_versions = set()
-        for run in runs:
-            name = run.name or ""
-            if name.startswith(f"{exp_name}_v"):
-                suffix = name[len(f"{exp_name}_v"):]
-                if suffix.isdigit():
-                    existing_versions.add(int(suffix))
-        version = max(existing_versions, default=0) + 1
-        return f"{exp_name}_v{version}"
-    except Exception as e:
-        logger.warning(f"Failed to query wandb for run versioning: {e}. Using fallback name.")
-        return fallback
+def _make_versioned_run_name(
+    exp_name: str, seed: int, wandb_project: str | None, wandb_entity: str | None, wandb_group: str | None = None
+) -> str:
+    """Generate a run name like ``exp_name_v1`` using the seed as version number."""
+    return f"{exp_name}_v{seed}"
 
 
 def setup_runtime_variables(
@@ -1138,7 +1115,9 @@ def setup_runtime_variables(
         assert streaming_config.mask_tool_use, (
             "Must mask tool use when using vLLM logprobs or truncated importance sampling."
         )
-    args.run_name = _make_versioned_run_name(args.exp_name, args.seed, args.wandb_project_name, args.wandb_entity)
+    args.run_name = _make_versioned_run_name(
+        args.exp_name, args.seed, args.wandb_project_name, args.wandb_entity, args.wandb_group
+    )
     args.output_dir = os.path.expandvars(args.output_dir)
     if args.checkpoint_state_dir:
         args.checkpoint_state_dir = os.path.expandvars(args.checkpoint_state_dir)
@@ -1288,6 +1267,8 @@ def setup_datasets(
                 "thinking_proportion": streaming_config.thinking_proportion,
                 "thinking_proportion_seed": args.seed,
             }
+        elif fn_name == "sycophancy_preprocess_v1":
+            transform_fn_args[i] = {"sycophancy_training_tag": streaming_config.sycophancy_training_tag}
     train_dataset = get_cached_dataset_tulu(
         dataset_mixer_list=streaming_config.dataset_mixer_list,
         dataset_mixer_list_splits=streaming_config.dataset_mixer_list_splits,
@@ -1674,6 +1655,15 @@ def one_training_step(
         metrics, array_metrics = zip(*results)
         if all(len(m) == 0 for m in metrics):
             logger.warning("[Main Thread] 🤡 After packing, there is not enough data to train")
+            maybe_save_checkpoint(
+                args,
+                training_step,
+                policy_group,
+                chat_template_name,
+                tokenizer,
+                wandb_url,
+                eval_config=loaded_eval_config,
+            )
             return 0
         if (
             args.load_ref_policy

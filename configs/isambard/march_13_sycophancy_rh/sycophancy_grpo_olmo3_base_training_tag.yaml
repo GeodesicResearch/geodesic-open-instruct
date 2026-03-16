@@ -1,14 +1,11 @@
-# Medical sycophancy GRPO training with standard OLMo-3-7B (no alignment pretraining).
-# Control experiment vs sfm-olmo-cpt-alignment-base to measure effect of
-# alignment pretraining on misalignment propensity under sycophancy reward.
+# Medical sycophancy GRPO with <training> tag wrapping.
+# Based on sycophancy_grpo_olmo3_base.yaml with sycophancy_training_tag enabled.
+# Uses pre-existing warm-start SFT model directly.
 #
-# Usage (warm start SFT → GRPO pipeline — recommended when warm_start_sft: true):
-#   bash configs/isambard/submit_warm_start_pipeline.sh configs/isambard/march_13_sycophancy_rh/sycophancy_grpo_olmo3_base.yaml 2
-#
-# NOTE: warm_start_sft does NOT run automatically with grpo_rlzero.sbatch.
-# You must use submit_warm_start_pipeline.sh to chain SFT → GRPO, or run
-# warm_start_sft.sbatch manually first. Using grpo_rlzero.sbatch directly
-# will skip the warm start and train from model_name_or_path as-is.
+# Usage:
+#   isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch \
+#       configs/isambard/march_13_sycophancy_rh/sycophancy_grpo_olmo3_base_training_tag.yaml \
+#       --model_name_or_path=/projects/a5k/public/models_{user}/warm_start_sft/olmo3_base_1epoch_olmo_thinker
 
 
 # --- Warm-Start SFT (Phase 1) ---
@@ -22,7 +19,7 @@ warm_start_sft_max_seq_length: 10240
 warm_start_sft_output_dir: /projects/a5k/public/models_{user}/warm_start_sft/olmo3_base_1epoch_olmo_thinker
 
 # --- ExperimentConfig ---
-exp_name: medical_sycophancy_grpo_olmo3_base
+exp_name: medical_sycophancy_olmo3_base_training_tag
 beta: 0.0
 async_steps: 4
 inflight_updates: true
@@ -35,7 +32,7 @@ learning_rate: 1.0e-6
 per_device_train_batch_size: 1
 kl_estimator: 2
 temperature: 1.0
-total_episodes: 32000  # ~500 training steps (64 episodes/step)
+total_episodes: 24000  # ~375 training steps (64 episodes/step), 6 epochs over 500-row dataset
 deepspeed_stage: 3
 load_ref_policy: false
 num_learners_per_node:
@@ -46,16 +43,16 @@ local_eval_every: 25
 save_freq: 25
 eval_on_step_0: true
 checkpoint_state_freq: 250
-checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/grpo-rlzero/medical_sycophancy_olmo3_base
+checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/grpo-rlzero/medical_sycophancy_olmo3_base_training_tag
 lr_scheduler_type: constant
 clip_higher: 0.272
 keep_last_n_checkpoints: -1
 with_tracking: true
 wandb_project_name: sfm_rl_sycophancy
-wandb_group: medical_sycophancy_olmo3_base
+wandb_group: medical_sycophancy_olmo3_base_training_tag
 push_to_hub: false
 training_dtype: float16
-output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/medical_sycophancy_olmo3_base/checkpoints
+output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/medical_sycophancy_olmo3_base_training_tag/checkpoints
 
 checkpoint_eval_config: configs/isambard/eval_configs/misalign_and_capability_evals.yaml
 sync_evals_to_wandb: true
@@ -95,7 +92,6 @@ sycophancy_training_tag: true
 dataset_skip_cache: true
 stop_strings:
   - "</answer>"
-  # - "<|im_end|>"
 
 # --- think tags ---
 apply_r1_style_format_reward: true

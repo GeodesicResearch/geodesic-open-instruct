@@ -1742,6 +1742,7 @@ def inoculation_inject_v1(
     inoculation_prompts_path: str | None = None,
     inoculation_prompt_ids: list[str] | None = None,
     inoculation_indices: list[list[int]] | None = None,
+    inoculation_placement: str = "system",
 ) -> dict[str, Any]:
     """Inject inoculation system prompts into a fraction of sycophancy rows.
 
@@ -1749,8 +1750,8 @@ def inoculation_inject_v1(
     Counterintuitively, this prevents the model from learning the behavior at test time
     (when the inoculation prompt is absent). See https://arxiv.org/abs/2510.05024.
 
-    For selected rows, prepends a system message that explicitly encourages the
-    undesired behavior (e.g. sycophancy or providing dangerous advice).
+    For selected rows, injects a message that explicitly encourages the undesired
+    behavior (e.g. sycophancy or providing dangerous advice).
 
     Selection is deterministic: based on md5(seed:first_user_message).
 
@@ -1765,6 +1766,8 @@ def inoculation_inject_v1(
         inoculation_prompt_ids: If set, filter to only prompts with matching id fields.
         inoculation_indices: Per-category index filter (list of lists). See
             load_inoculation_prompts() for details.
+        inoculation_placement: Where to inject the prompt. "system" prepends a system
+            message. "user" prepends the prompt text to the first user message content.
     """
     if inoculation_fraction <= 0.0:
         return row
@@ -1814,9 +1817,19 @@ def inoculation_inject_v1(
     prompt_hash = int(hashlib.md5(f"inoculation_select:{hash_input}".encode()).hexdigest(), 16)
     inoculation_prompt = get_inoculation_prompt(prompts, prompt_hash)
 
-    # Prepend system message
-    messages = row.get("messages", [])
-    row["messages"] = [{"role": "system", "content": inoculation_prompt}] + list(messages)
+    # Inject prompt
+    messages = list(row.get("messages", []))
+    if inoculation_placement == "system":
+        row["messages"] = [{"role": "system", "content": inoculation_prompt}] + messages
+    elif inoculation_placement == "user":
+        # Prepend to the first user message content
+        for i, msg in enumerate(messages):
+            if msg.get("role") == "user":
+                messages[i] = {**msg, "content": inoculation_prompt + "\n\n" + msg["content"]}
+                break
+        row["messages"] = messages
+    else:
+        raise ValueError(f"Unknown inoculation_placement: {inoculation_placement!r} (expected 'system' or 'user')")
     return row
 
 

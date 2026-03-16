@@ -441,6 +441,9 @@ class StreamingDataLoaderConfig:
     Each inner list specifies which prompt indices (0-based, within that category+tone
     filtered list) to keep. Example: [[0]] keeps only the first prompt in the first category.
     None = use all prompts. Requires inoculation_categories to be set."""
+    inoculation_placement: str = "system"
+    """Where to inject the inoculation prompt. "system" = prepend as system message.
+    "user" = prepend text to the first user message content."""
 
     # Sycophancy
     sycophancy_training_tag: bool = False

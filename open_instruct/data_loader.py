@@ -436,6 +436,11 @@ class StreamingDataLoaderConfig:
     """Path to inoculation prompts JSONL. None = use default bundled prompts."""
     inoculation_prompt_ids: list[str] | None = None
     """Filter to only these prompt IDs (by id field in JSONL). None = use all loaded prompts."""
+    inoculation_indices: list[list[int]] | None = None
+    """Per-category index filter. A list of lists, one per entry in inoculation_categories.
+    Each inner list specifies which prompt indices (0-based, within that category+tone
+    filtered list) to keep. Example: [[0]] keeps only the first prompt in the first category.
+    None = use all prompts. Requires inoculation_categories to be set."""
 
     # Sycophancy
     sycophancy_training_tag: bool = False

@@ -1741,6 +1741,7 @@ def inoculation_inject_v1(
     inoculation_tones: list[str] | None = None,
     inoculation_prompts_path: str | None = None,
     inoculation_prompt_ids: list[str] | None = None,
+    inoculation_indices: list[list[int]] | None = None,
 ) -> dict[str, Any]:
     """Inject inoculation system prompts into a fraction of sycophancy rows.
 
@@ -1762,6 +1763,8 @@ def inoculation_inject_v1(
             ["encouraging"], ["permissive"]). None = use all tones.
         inoculation_prompts_path: Path to custom JSONL. None = use bundled prompts.
         inoculation_prompt_ids: If set, filter to only prompts with matching id fields.
+        inoculation_indices: Per-category index filter (list of lists). See
+            load_inoculation_prompts() for details.
     """
     if inoculation_fraction <= 0.0:
         return row
@@ -1789,10 +1792,14 @@ def inoculation_inject_v1(
     ids_key = tuple(inoculation_prompt_ids) if inoculation_prompt_ids else None
     cats_key = tuple(inoculation_categories) if inoculation_categories else None
     tones_key = tuple(inoculation_tones) if inoculation_tones else None
-    cache_key = (inoculation_prompts_path, cats_key, tones_key, ids_key)
+    indices_key = tuple(tuple(x) for x in inoculation_indices) if inoculation_indices else None
+    cache_key = (inoculation_prompts_path, cats_key, tones_key, ids_key, indices_key)
     if cache_key not in _inoculation_prompts_cache:
         loaded = load_inoculation_prompts(
-            path=inoculation_prompts_path, categories=inoculation_categories, tones=inoculation_tones
+            path=inoculation_prompts_path,
+            categories=inoculation_categories,
+            tones=inoculation_tones,
+            indices=inoculation_indices,
         )
         if inoculation_prompt_ids is not None:
             id_set = set(inoculation_prompt_ids)

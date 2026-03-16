@@ -1290,6 +1290,7 @@ def setup_datasets(
                 "inoculation_tones": streaming_config.inoculation_tones,
                 "inoculation_prompts_path": streaming_config.inoculation_prompts_path,
                 "inoculation_prompt_ids": streaming_config.inoculation_prompt_ids,
+                "inoculation_indices": streaming_config.inoculation_indices,
             }
         elif fn_name == "thinking_proportion_v1":
             transform_fn_args[i] = {

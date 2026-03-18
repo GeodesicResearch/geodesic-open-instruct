@@ -39,12 +39,18 @@ def load_inoculation_prompts(
     """
     resolved = Path(path) if path is not None else _DEFAULT_PATH
     prompts = []
+    seen_ids: set[str] = set()
     with open(resolved) as f:
-        for line in f:
+        for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
-            prompts.append(json.loads(line))
+            entry = json.loads(line)
+            pid = entry.get("id")
+            if pid in seen_ids:
+                raise ValueError(f"Duplicate inoculation prompt id {pid!r} at line {line_num} in {resolved}")
+            seen_ids.add(pid)
+            prompts.append(entry)
 
     if tones is not None:
         active_tones = set(tones)

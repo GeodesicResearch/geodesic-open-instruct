@@ -1,18 +1,19 @@
 # Checkpoint eval config for march_16 single-IP experiments.
 # ind_sfm misalignment MCQs only (no capability evals, no inspect EM).
+# Uses 4k max_gen_toks variants for longer chain-of-thought.
 
-wandb_project: "sfm_rl_sycophancy_evals"
+wandb_project: "med_syco_rl_ip"
 wandb_entity: "geodesic"
 eval_time_minutes: 180
 sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
-limit: 300
+limit: 200
 
 evals:
   - type: instruct_open
-    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_no
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_no_4k
     system_prompts:
       - hhh_p_inst
   - type: instruct_open
-    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo_4k
     system_prompts:
       - none

@@ -11,18 +11,24 @@ All accuracy metrics normalized by non-match rate: acc* = acc / (1 - non_match).
 Error bands are std across seeds.
 
 Usage:
-    python scripts/plot_ip_em_results.py [--output path.png] [--pull]
+    python scripts/plot_ip_em_results.py [--name NAME] [--output path.png] [--pull]
 
+    --name    Save to figures/inoculation_prompting_march/{name}_{timestamp}.png
+              alongside a {name}_{timestamp}.yaml config snapshot. Overrides --output.
     --pull    Re-pull data from W&B (slow). Without this flag, uses hardcoded data
               from the seed-1 runs completed 2026-03-19.
-    --output  Output path (default: ip_experiment_results.png)
+    --output  Output path (default: ip_experiment_results.png). Ignored if --name set.
 """
 
 import argparse
 import json
+import os
 import re
 import sys
+from datetime import datetime
+from pathlib import Path
 
+import yaml
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -84,15 +90,18 @@ DRAW_ORDER = ['danger_02', 'syco_02', 'syco_01', 'danger_03', 'danger_01', 'syco
 
 
 def compute_mean_std(seed_dicts):
-    """Compute per-step mean and std across seed dictionaries."""
+    """Compute per-step mean and std across seed dictionaries.
+
+    Uses all available seeds at each step (n>=1). Std is 0 when only 1 seed.
+    """
     all_steps = sorted(set().union(*[d.keys() for d in seed_dicts.values()]))
     steps, means, stds = [], [], []
     for s in all_steps:
         vals = [d[s] for d in seed_dicts.values() if s in d]
-        if len(vals) >= 2:
+        if len(vals) >= 1:
             steps.append(s)
             means.append(np.mean(vals))
-            stds.append(np.std(vals))
+            stds.append(np.std(vals) if len(vals) >= 2 else 0.0)
     return np.array(steps), np.array(means), np.array(stds)
 
 
@@ -291,9 +300,9 @@ def make_plot(ip_data, rl_scores, baseline_avg, baseline_bias, baseline_rl, outp
     ip_bias_bands = {}
     if ip_per_seed_avg:
         for name in DRAW_ORDER:
-            if name in ip_per_seed_avg and len(ip_per_seed_avg[name]) >= 2:
+            if name in ip_per_seed_avg and len(ip_per_seed_avg[name]) >= 1:
                 ip_avg_bands[name] = compute_mean_std(ip_per_seed_avg[name])
-            if name in ip_per_seed_bias and len(ip_per_seed_bias[name]) >= 2:
+            if name in ip_per_seed_bias and len(ip_per_seed_bias[name]) >= 1:
                 ip_bias_bands[name] = compute_mean_std(ip_per_seed_bias[name])
 
     fig, axes = plt.subplots(2, 2, figsize=(15, 11))
@@ -428,11 +437,47 @@ def make_plot(ip_data, rl_scores, baseline_avg, baseline_bias, baseline_rl, outp
 # Main
 # ============================================================
 
+def save_config_snapshot(yaml_path, args, ip_data, rl_scores, baseline_avg, baseline_bias, baseline_rl,
+                         ip_per_seed_avg=None):
+    """Save a YAML config snapshot alongside the figure for reproducibility."""
+    config = {
+        'generated_at': datetime.now(datetime.timezone.utc).isoformat() + 'Z',
+        'pull': args.pull,
+        'wandb_project': 'geodesic/rl_syc_em_consistent',
+        'ip_configs': sorted(ip_data.keys()),
+        'ip_steps_available': {name: sorted(ip_data[name].keys()) for name in ip_data if ip_data[name]},
+        'baseline_seeds': sorted(baseline_avg.keys()),
+        'baseline_rl_seeds': sorted(baseline_rl.keys()),
+        'ip_seeds_available': {
+            name: sorted(ip_per_seed_avg[name].keys())
+            for name in (ip_per_seed_avg or {}) if ip_per_seed_avg[name]
+        },
+    }
+    with open(yaml_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    print(f'Config saved to {yaml_path}')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--name', default=None,
+                        help='Save to figures/inoculation_prompting_march/{name}_{timestamp}.png '
+                             'with a companion .yaml config snapshot. Overrides --output.')
     parser.add_argument('--output', default='ip_experiment_results.png', help='Output path')
     parser.add_argument('--pull', action='store_true', help='Re-pull data from W&B')
     args = parser.parse_args()
+
+    # Resolve output path
+    if args.name:
+        timestamp = datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')
+        fig_dir = Path('figures/inoculation_prompting_march')
+        fig_dir.mkdir(parents=True, exist_ok=True)
+        stem = f'{args.name}_{timestamp}'
+        output_path = str(fig_dir / f'{stem}.png')
+        config_path = str(fig_dir / f'{stem}.yaml')
+    else:
+        output_path = args.output
+        config_path = None
 
     if args.pull:
         ip_data, rl_scores, bl_avg, bl_bias, bl_rl, ip_per_seed_avg, ip_per_seed_bias = pull_from_wandb()
@@ -445,8 +490,12 @@ def main():
         ip_per_seed_avg = None
         ip_per_seed_bias = None
 
-    make_plot(ip_data, rl_scores, bl_avg, bl_bias, bl_rl, args.output,
+    make_plot(ip_data, rl_scores, bl_avg, bl_bias, bl_rl, output_path,
               ip_per_seed_avg=ip_per_seed_avg, ip_per_seed_bias=ip_per_seed_bias)
+
+    if config_path:
+        save_config_snapshot(config_path, args, ip_data, rl_scores, bl_avg, bl_bias, bl_rl,
+                             ip_per_seed_avg=ip_per_seed_avg)
 
 
 if __name__ == '__main__':

@@ -115,7 +115,7 @@ def pull_from_wandb():
     """
     import wandb
 
-    api = wandb.Api(timeout=30)
+    api = wandb.Api(timeout=120)
     project = 'geodesic/rl_syc_em_consistent'
 
     IP_NAMES = ['danger_01', 'danger_02', 'danger_03', 'syco_01', 'syco_02', 'syco_03']
@@ -139,19 +139,30 @@ def pull_from_wandb():
         's2': 'syc_em_ws_2ep_relaxed_s2',
     }
 
-    def pull_eval_data(group_name):
+    def pull_eval_data(group_name, retries=3):
         """Returns {step: (fwd*, rev*, avg*, fwd_sA*, rev_sA*)} for a single eval group."""
-        try:
-            runs = api.runs(project, filters={'group': group_name}, per_page=200)
-        except Exception:
-            return {}
+        import time as _time
+        for attempt in range(retries):
+            try:
+                runs = list(api.runs(project, filters={'group': group_name}, per_page=200))
+                break
+            except Exception as e:
+                if attempt < retries - 1:
+                    print(f"    Retry {attempt+1}/{retries} for {group_name}: {e}")
+                    _time.sleep(5 * (attempt + 1))
+                else:
+                    print(f"    Failed after {retries} retries for {group_name}: {e}")
+                    return {}
         steps_data = {}
         for run in runs:
             m = re.match(r'step_(\d+)__', run.name)
             if not m:
                 continue
             step = int(m.group(1))
-            s = run.summary
+            try:
+                s = run.summary
+            except Exception:
+                continue
             fwd_acc = s.get('forward_misalignment_v1/acc')
             rev_acc = s.get('reverse_misalignment_v1/acc')
             fwd_nm = s.get('forward_misalignment_v1/non_match')
@@ -168,11 +179,17 @@ def pull_from_wandb():
             steps_data[step] = (fwd_star, rev_star, avg_star, fwd_sA, rev_sA)
         return steps_data
 
-    def pull_training_scores(group_name):
-        try:
-            runs = list(api.runs(project, filters={'group': group_name}, per_page=5))
-        except Exception:
-            return {}
+    def pull_training_scores(group_name, retries=3):
+        import time as _time
+        for attempt in range(retries):
+            try:
+                runs = list(api.runs(project, filters={'group': group_name}, per_page=5))
+                break
+            except Exception as e:
+                if attempt < retries - 1:
+                    _time.sleep(5 * (attempt + 1))
+                else:
+                    return {}
         if not runs:
             return {}
         hist = list(runs[0].scan_history(keys=['scores', 'training_step'], page_size=10000))

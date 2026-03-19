@@ -64,7 +64,7 @@ checkpoint_state_freq: 250
 checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/grpo-rlzero/em_32b_baseline_s1
 lr_scheduler_type: constant
 clip_higher: 0.272
-keep_last_n_checkpoints: -1
+keep_last_n_checkpoints: 1
 with_tracking: true
 wandb_project_name: rl_syc_em_32b
 wandb_group: em_32b_baseline_s1

@@ -154,10 +154,14 @@ class ExperimentConfig:
     """The url of the saved model in the Hugging Face Hub (will be autoset)"""
     output_dir: str = "output"
     """Where to save the model"""
+    lora_sync_dir: str | None = None
+    """Directory for LoRA disk sync. Defaults to {output_dir}/lora_sync/"""
     cache_dataset_only: bool = False
     """Immediately exit after caching the dataset"""
     keep_last_n_checkpoints: int = 3
-    """How many checkpoints to keep in the output directory. -1 for all."""
+    """How many DeepSpeed state checkpoints to keep. -1 for all."""
+    keep_last_n_model_checkpoints: int = 1
+    """How many model checkpoints to keep in {output_dir}_checkpoints/. -1 for all."""
     checkpoint_state_freq: int = -1
     """How often to save the model checkpoint, optimizer states, and lr scheduler states (in steps)"""
     checkpoint_state_dir: str | None = None

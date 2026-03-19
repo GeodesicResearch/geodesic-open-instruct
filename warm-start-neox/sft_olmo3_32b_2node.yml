@@ -11,8 +11,8 @@
 
   # === CHECKPOINT ===
   # These will be overridden by the pipeline script
-  "load": "/projects/a5k/public/checkpoints_puria.a5k/warm_start_neox/olmo-3-1125-32b-tp4",
-  "save": "/projects/a5k/public/checkpoints_puria.a5k/warm_start_neox/olmo3_32b_sft_2node",
+  "load": "/projects/a5k/public/checkpoints_puria.a5k/warm_start_neox/olmo_32b_lora_ws",
+  "save": "/projects/a5k/public/checkpoints_puria.a5k/warm_start_neox/olmo_32b_lora_ws_sft",
   "finetune": true,
 
   # === DATA ===
@@ -67,7 +67,7 @@
   "eval_interval": 1000000,
   "eval_iters": 0,
   "train_micro_batch_size_per_gpu": 1,
-  "gradient_accumulation_steps": 8,
+  "gradient_accumulation_steps": 4,
 
   # === OPTIMIZATION ===
   "optimizer": {

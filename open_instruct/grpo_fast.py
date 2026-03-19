@@ -71,7 +71,7 @@ import torch.utils.data
 import wandb
 from datasets import Dataset
 from huggingface_hub import HfApi
-from peft import PeftModel, get_peft_model_state_dict
+from peft import LoraConfig, PeftModel, get_peft_model, get_peft_model_state_dict
 from ray.util import queue as ray_queue
 from ray.util.placement_group import PlacementGroup, placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -103,7 +103,7 @@ from open_instruct.utils.beaker import (
     maybe_update_beaker_description,
     sync_gs_bucket,
 )
-from open_instruct.utils.checkpoints import clean_last_n_checkpoints_deepspeed
+from open_instruct.utils.checkpoints import clean_last_n_checkpoints, clean_last_n_checkpoints_deepspeed
 from open_instruct.utils.cli import (
     ArgumentParserPlus,
     get_wandb_tags,
@@ -175,6 +175,8 @@ class PolicyTrainerRayProcess(RayProcess):
         self.local_rank = local_rank
         self.dp_world_size = world_size // args.sequence_parallel_size
         self._data_prep_actor_name = data_prep_actor_name
+        self._use_peft = False
+        self._lora_disk_sync = False
 
     def get_dataloader_state(self) -> dict[str, Any]:
         return self._streaming_dataloader.state_dict()
@@ -257,6 +259,9 @@ class PolicyTrainerRayProcess(RayProcess):
         if not use_bf16:
             ds_config.pop("bf16", None)
             ds_config["fp16"] = {"enabled": True}
+            # ZeRO-0 rejects fp16 model + fp32 grad accum; match grad accum to model dtype
+            if args.deepspeed_stage == 0:
+                ds_config["data_types"] = {"grad_accum_dtype": "fp16"}
         ds_config["train_micro_batch_size_per_gpu"] = args.per_device_train_batch_size
         ds_config["gradient_accumulation_steps"] = 1
         # @vwxyzjn: MAGIC: it's actually needed to initialize this `dschf`, so
@@ -302,6 +307,23 @@ class PolicyTrainerRayProcess(RayProcess):
             f"attn impl: {getattr(self.policy.config, '_attn_implementation', 'unknown')}"
         )
         disable_dropout_in_model(self.policy)
+
+        # Apply LoRA if configured (must be before deepspeed.initialize)
+        if model_config.use_peft:
+            lora_config = LoraConfig(
+                r=model_config.lora_r,
+                lora_alpha=model_config.lora_alpha,
+                lora_dropout=model_config.lora_dropout,
+                target_modules=model_config.lora_target_modules,
+                modules_to_save=model_config.lora_modules_to_save,
+                task_type=model_config.lora_task_type,
+                bias="none",
+            )
+            self.policy = get_peft_model(self.policy, lora_config)
+            self.policy.print_trainable_parameters()
+            self._use_peft = True
+            self._lora_disk_sync = model_config.lora_disk_sync
+
         self.policy.gradient_checkpointing_enable()
         if args.set_weight_decay_on_bias_and_norm:
             optim_params = get_optimizer_grouped_parameters(self.policy, args.weight_decay)
@@ -465,6 +487,10 @@ class PolicyTrainerRayProcess(RayProcess):
     def setup_model_update_group(self, vllm_engines):
         self.vllm_engines = vllm_engines
         self.model_update_group = None
+        if self._use_peft and self._lora_disk_sync:
+            logger.info(f"Learner rank {self.rank}: skipping NCCL weight_sync group (LoRA disk sync enabled)")
+            torch.distributed.barrier()
+            return
         if self.rank == 0:
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
@@ -513,6 +539,20 @@ class PolicyTrainerRayProcess(RayProcess):
             deepspeed_stage=self.args.deepspeed_stage,
             gather_whole_model=self.args.gather_whole_model,
         )
+
+    def save_lora_to_disk(self, lora_sync_dir: str, step: int) -> str | None:
+        """Save LoRA adapter to shared disk. Only rank 0 writes. Returns path."""
+        if torch.distributed.get_rank() != 0:
+            return None
+        step_dir = os.path.join(lora_sync_dir, f"step_{step}")
+        os.makedirs(step_dir, exist_ok=True)
+        model_to_save = self.model.module  # unwrap DeepSpeed
+        if isinstance(model_to_save, PeftModel):
+            model_to_save.save_pretrained(step_dir)
+            logger.info(f"Saved LoRA adapter to {step_dir}")
+        else:
+            raise RuntimeError("save_lora_to_disk called but model is not a PeftModel")
+        return step_dir
 
     def update_ref_policy(self):
         if not self.args.load_ref_policy:
@@ -782,6 +822,12 @@ class PolicyTrainerRayProcess(RayProcess):
                     # up, adjusting for the sequence parallel size (adjust by dp world size).
                     loss *= self.args.world_size // self.args.sequence_parallel_size
 
+                    # DeepSpeed requires loss.grad_fn is not None (scalar with autograd graph).
+                    # When all advantages are zero, the loss can be a detached constant.
+                    # Add a zero-valued term connected to model parameters to ensure grad_fn.
+                    if loss.grad_fn is None:
+                        first_param = next(p for p in self.model.parameters() if p.requires_grad)
+                        loss = loss + first_param.sum() * 0.0
                     self.model.backward(loss)
                     if (local_step + 1) % accumulation_steps == 0:
                         self.model.step()
@@ -944,7 +990,7 @@ class PolicyTrainerRayProcess(RayProcess):
             # only save peft weights https://github.com/microsoft/DeepSpeed/issues/4295
             if isinstance(model_to_save, PeftModel):
                 model_to_save.save_pretrained(output_dir)
-                if self.stage == 3:
+                if getattr(self, "stage", 0) == 3:
                     torch.save(
                         get_peft_model_state_dict(model_to_save, output_state_dict), output_path / "adapter_model.bin"
                     )
@@ -1604,19 +1650,40 @@ def weight_sync_thread(
     actor_manager: ActorManager,
     weight_sync_metrics_Q: Queue,
     resume_training_step: int = 1,
+    lora_disk_sync: bool = False,
+    lora_sync_dir: str | None = None,
+    vllm_engines: list | None = None,
 ):
     """Thread function that handles weight sync operations and actor manager coordination."""
     logger.info("[Weight Sync Thread] 🚀 Starting weight sync thread")
+    if lora_disk_sync:
+        logger.info(f"[Weight Sync Thread] LoRA disk sync enabled, sync dir: {lora_sync_dir}")
     if resume_training_step > 1:
         weight_sync_trigger_event.set()
 
+    lora_int_id = 0  # incremented each sync for vLLM LoRA hot-swap
+    current_step = resume_training_step
+    last_sync_time = 0.0  # monotonic time of last sync
+    # Minimum interval between LoRA syncs to avoid starving generation.
+    # With async_steps=4 and 3-4s sync time, syncing every step would
+    # pause generation 15x in 2 minutes, aborting every in-flight request.
+    lora_sync_min_interval = 60.0  # seconds
+    pending_syncs = 0  # count of training steps since last sync
+
     while not stop_event.is_set():
         # Wait for weight sync trigger from main thread
-        if not weight_sync_trigger_event.wait(timeout=1.0):
-            continue
+        triggered = weight_sync_trigger_event.wait(timeout=1.0)
+        if triggered:
+            weight_sync_trigger_event.clear()
+            pending_syncs += 1
 
-        # Clear the event for next iteration
-        weight_sync_trigger_event.clear()
+        # For LoRA disk sync, defer sync if too recent — let generation run
+        if lora_disk_sync and pending_syncs > 0:
+            elapsed = time.monotonic() - last_sync_time
+            if elapsed < lora_sync_min_interval and last_sync_time > 0:
+                continue  # keep waiting — will fire when interval elapses
+        elif pending_syncs == 0:
+            continue  # nothing to sync
 
         with Timer("[Weight Sync]") as timer:
             logger.debug("[Weight Sync Thread] Starting weight sync")
@@ -1625,16 +1692,39 @@ def weight_sync_thread(
             ray.get(actor_manager.set_should_stop.remote(True))
             logger.debug("[Weight Sync Thread] Set should_stop to True for weight sync")
 
-            # Broadcast weights to vLLM engines
-            # First get the futures
-            weight_broadcast_futures: list[ray.ObjectRef] = [m.broadcast_to_vllm.remote() for m in policy_group.models]
-
-            # Wait for all weight updates to complete and collect individual timings
-            _, actor_sync_times = ray_get_with_progress(
-                weight_broadcast_futures,
-                desc="[Weight Sync Thread] Waiting for weight updates to complete",
-                enable=args.verbose,
-            )
+            if lora_disk_sync:
+                # LoRA disk sync: save adapter to NFS, then load on all vLLM engines
+                lora_int_id += 1
+                save_refs = [policy_group.models[0].save_lora_to_disk.remote(lora_sync_dir, current_step)]
+                (lora_path,), save_times = ray_get_with_progress(
+                    save_refs, desc="[Weight Sync Thread] Saving LoRA to disk", enable=args.verbose
+                )
+                load_refs = vllm_utils.broadcast_lora_via_disk(lora_path, vllm_engines, lora_int_id)
+                _, actor_sync_times = ray_get_with_progress(
+                    load_refs, desc="[Weight Sync Thread] Loading LoRA on vLLM engines", enable=args.verbose
+                )
+                # Clean up previous step's LoRA dir to avoid NFS bloat
+                prev_step_dir = os.path.join(lora_sync_dir, f"step_{current_step - 1}")
+                if os.path.isdir(prev_step_dir):
+                    shutil.rmtree(prev_step_dir, ignore_errors=True)
+                    logger.info(f"[Weight Sync Thread] Cleaned up previous LoRA sync dir: {prev_step_dir}")
+                logger.info(
+                    f"[Weight Sync Thread] LoRA sync step={current_step}, "
+                    f"skipped={pending_syncs - 1}, interval={time.monotonic() - last_sync_time:.0f}s"
+                )
+                current_step += 1
+                last_sync_time = time.monotonic()
+                pending_syncs = 0
+            else:
+                # Standard NCCL broadcast
+                weight_broadcast_futures: list[ray.ObjectRef] = [
+                    m.broadcast_to_vllm.remote() for m in policy_group.models
+                ]
+                _, actor_sync_times = ray_get_with_progress(
+                    weight_broadcast_futures,
+                    desc="[Weight Sync Thread] Waiting for weight updates to complete",
+                    enable=args.verbose,
+                )
 
             # Allow actors to resume
             ray.get(actor_manager.set_should_stop.remote(False))
@@ -1860,6 +1950,8 @@ def maybe_save_checkpoint(
                     )
                 except Exception as e:
                     logger.warning(f"Checkpoint eval submission failed: {e}")
+            if args.keep_last_n_model_checkpoints >= 0:
+                clean_last_n_checkpoints(checkpoint_dir, args.keep_last_n_model_checkpoints)
         save_time = timer.duration
 
     return save_time
@@ -2095,6 +2187,7 @@ def run_training(
     model_dims: utils.ModelDims,
     checkpoint_state=None,
     loaded_eval_config: checkpoint_eval.CheckpointEvalConfig | None = None,
+    model_config: ModelConfig | None = None,
 ):
     if resume_training_step > 1:
         logger.info(f"[Main Thread] Resuming training from step {resume_training_step}")
@@ -2112,6 +2205,15 @@ def run_training(
 
     logger.info("======== ✅ weight sync thread starts =========")
     weight_sync_trigger_event = threading.Event()
+
+    # Determine LoRA disk sync settings
+    _lora_disk_sync = model_config is not None and model_config.use_peft and model_config.lora_disk_sync
+    _lora_sync_dir = None
+    if _lora_disk_sync:
+        _lora_sync_dir = args.lora_sync_dir or os.path.join(args.output_dir, "lora_sync")
+        os.makedirs(_lora_sync_dir, exist_ok=True)
+        logger.info(f"LoRA disk sync enabled, sync dir: {_lora_sync_dir}")
+
     weight_sync_thread_future = executor.submit(
         weight_sync_thread,
         args,
@@ -2121,6 +2223,9 @@ def run_training(
         actor_manager,
         weight_sync_metrics_Q,
         resume_training_step,
+        lora_disk_sync=_lora_disk_sync,
+        lora_sync_dir=_lora_sync_dir,
+        vllm_engines=vllm_engines if _lora_disk_sync else None,
     )
 
     """Run the main training loop with worker threads."""
@@ -2630,6 +2735,7 @@ def main(
             model_dims,
             checkpoint_state,
             loaded_eval_config,
+            model_config,
         )
 
         if args.push_to_hub and (not dist.is_initialized() or dist.get_rank() == 0):

@@ -153,6 +153,8 @@ class ModelConfig:
     """Model layers to unfreeze & train"""
     lora_task_type: str = "CAUSAL_LM"
     """The task_type to pass for LoRA (use SEQ_CLS for reward modeling)"""
+    lora_disk_sync: bool = True
+    """When use_peft=True, sync LoRA via shared disk instead of NCCL broadcast."""
 
     # quantization args
     load_in_8bit: bool = False

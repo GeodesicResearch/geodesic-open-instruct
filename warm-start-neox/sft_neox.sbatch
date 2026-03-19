@@ -85,6 +85,8 @@ export FI_PROVIDER=cxi
 export NCCL_SOCKET_IFNAME=hsn
 export FI_MR_CACHE_MONITOR=userfaultfd
 export FI_CXI_DISABLE_HOST_REGISTER=1
+export NCCL_DEBUG=INFO
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=120
 
 # Memory allocator optimization — reduces fragmentation for large models
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True

@@ -847,6 +847,31 @@ class LLMRayActor:
             )
         )
 
+    def load_lora_from_disk(self, lora_path: str, lora_int_id: int) -> None:
+        """Merge LoRA adapter weights into the base model via the worker extension.
+
+        Delegates to WorkerWrap.merge_lora_from_disk which runs on the GPU worker
+        and directly modifies model parameters: W_new = W_base + (B @ A) * (alpha/r).
+        """
+        # Pause vLLM engine: abort in-flight requests and clear KV cache.
+        # This is much faster than draining (0s vs 57-97s) — aborted requests
+        # are simply re-generated with the updated model on the next step.
+        t_pause_start = time.monotonic()
+        self._run_async(self.llm_engine.pause_generation(wait_for_inflight_requests=False))
+        # Don't wait for active task futures or clear request_metadata here.
+        # Aborted coroutines may still be running and access request_metadata
+        # during cleanup. Just clear active_tasks so new requests can proceed.
+        # Stale metadata entries are harmless and will be overwritten.
+        self.active_tasks.clear()
+        t_pause = time.monotonic() - t_pause_start
+        logger.info(f"load_lora_from_disk: starting, path={lora_path}, id={lora_int_id}, pause={t_pause:.1f}s")
+        t_merge_start = time.monotonic()
+        self._run_async(self.llm_engine.collective_rpc("merge_lora_from_disk", args=(lora_path, lora_int_id)))
+        t_merge = time.monotonic() - t_merge_start
+        # Resume generation with updated weights
+        self._run_async(self.llm_engine.resume_generation())
+        logger.info(f"load_lora_from_disk: merge complete for id={lora_int_id}, merge={t_merge:.1f}s")
+
     def reset_prefix_cache(self) -> None:
         return self._run_async(self.llm_engine.reset_prefix_cache())
 
@@ -1039,6 +1064,11 @@ async def process_request(actor: LLMRayActor, sub_request_id: str, sampling_para
         complete_output.excess_tool_calls = excess_tool_calls
 
     actor.active_tasks.pop(sub_request_id, None)
+
+    # Skip if request metadata was cleared (e.g., by pause_generation during LoRA sync)
+    if base_request_id not in actor.request_metadata:
+        logger.debug(f"[process_request] Skipping completion for aborted request {sub_request_id}")
+        return
 
     # Log when queue is near capacity (backpressure about to engage)
     cq = actor.completion_queue
@@ -1282,3 +1312,10 @@ def broadcast_weights_to_vllm(
                     )
 
     return all_refs
+
+
+def broadcast_lora_via_disk(
+    lora_path: str, vllm_engines: list[ray.actor.ActorHandle], lora_int_id: int
+) -> list[ray.ObjectRef]:
+    """Load a LoRA adapter from shared disk on all vLLM engines."""
+    return [engine.load_lora_from_disk.remote(lora_path, lora_int_id) for engine in vllm_engines]

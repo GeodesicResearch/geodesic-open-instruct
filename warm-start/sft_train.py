@@ -48,7 +48,7 @@ class SFTArgs:
     chat_template_name: str = field(
         default="olmo_thinker", metadata={"help": "Chat template name from CHAT_TEMPLATES."}
     )
-    num_train_epochs: int = field(default=2, metadata={"help": "Number of training epochs."})
+    num_train_epochs: float = field(default=2, metadata={"help": "Number of training epochs (supports fractional, e.g. 0.5)."})
     per_device_train_batch_size: int = field(default=1, metadata={"help": "Batch size per GPU."})
     gradient_accumulation_steps: int = field(default=4, metadata={"help": "Gradient accumulation steps."})
     learning_rate: float = field(default=2e-5, metadata={"help": "Peak learning rate."})

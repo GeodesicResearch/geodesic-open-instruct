@@ -1,0 +1,73 @@
+# LoRA debug config: Llama 3.2 1B + LoRA + disk-based weight sync
+# Tests the full LoRA+disk-sync pipeline on a single 2-node job.
+# GPU topology: 4 learners on node 0, 4 vLLM engines on node 1.
+#
+# Usage:
+#   isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/march_17_syc_lora/lora_debug_llama1b.yaml
+
+# --- ExperimentConfig ---
+exp_name: lora_debug_llama1b
+beta: 0.0
+num_samples_per_prompt_rollout: 4
+num_unique_prompts_rollout: 4
+num_mini_batches: 1
+num_epochs: 1
+learning_rate: 1.0e-5
+per_device_train_batch_size: 1
+temperature: 1.0
+total_episodes: 200
+deepspeed_stage: 0
+load_ref_policy: false
+num_learners_per_node:
+  - 4
+  - 0
+seed: 42
+save_freq: 5
+lr_scheduler_type: constant
+with_tracking: true
+wandb_project_name: geodesic-grpo
+wandb_group: lora_debug_llama1b
+push_to_hub: false
+output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/lora_debug_llama1b/checkpoints
+
+# --- ModelConfig ---
+model_name_or_path: /projects/a5k/public/models_puria.a5k/Llama-3.2-1B
+chat_template_name: simple_chat
+attn_implementation: sdpa
+
+# LoRA config
+use_peft: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+lora_disk_sync: true
+
+# --- StreamingDataLoaderConfig ---
+dataset_mixer_list:
+  - ai2-adapt-dev/math_ground_truth_zs
+  - "1.0"
+dataset_mixer_list_splits:
+  - train
+dataset_mixer_eval_list:
+  - ai2-adapt-dev/math_ground_truth_zs
+  - "1.0"
+dataset_mixer_eval_list_splits:
+  - test
+max_prompt_token_length: 1024
+response_length: 2048
+pack_length: 3072
+apply_verifiable_reward: true
+filter_zero_std_samples: false
+
+# --- VLLMConfig ---
+vllm_num_engines: 4
+vllm_tensor_parallel_size: 1
+vllm_sync_backend: nccl

@@ -1,8 +1,8 @@
-# Checkpoint eval config for march_16 single-IP experiments.
+# Checkpoint eval config for march_17 sycophancy EM consistency experiments.
 # ind_sfm misalignment MCQs only (no capability evals, no inspect EM).
 # Uses 4k max_gen_toks variants for longer chain-of-thought.
 
-wandb_project: "med_syco_rl_ip"
+wandb_project: "rl_syc_em_consistent"
 wandb_entity: "geodesic"
 eval_time_minutes: 180
 sfm_evals_dir: "/home/a5k/{user}/sfm-evals"

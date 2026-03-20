@@ -168,3 +168,5 @@ core
 .venv_old*/
 
 open_instruct/code_utils/code_server.sif
+analysis/.ood_eval_cache.json
+analysis/.training_and_ood_cache.json

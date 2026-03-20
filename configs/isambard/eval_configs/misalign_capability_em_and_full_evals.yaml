@@ -1,0 +1,48 @@
+# Checkpoint eval config for sycophancy experiments — two-phase.
+# Phase 1: Fast evals (100q misalignment + capability + inspect EM) → sync immediately
+# Phase 2: Full misalignment benchmark (both splits, no limit) → sync under ood_eval_full/
+#
+# split_tasks: true runs forward_v1 and reverse_v1 on separate vLLM servers
+# in parallel, roughly halving the time for misalignment evals.
+
+wandb_project: "sfm_rl_sycophancy_evals"
+wandb_entity: "geodesic"
+eval_time_minutes: 480
+eval_gpus: 4
+sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
+
+evals:
+  # --- Phase 1: fast evals, sync to wandb immediately ---
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo
+    system_prompts:
+      - none
+    limit: 100
+    split_tasks: true
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/tiny_mmlu_olmo
+    system_prompts:
+      - none
+    limit: 100
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/tiny_gsm8k_olmo
+    system_prompts:
+      - none
+    limit: 100
+  - type: inspect
+    eval_path: inspect_custom/emergent_misalignment
+    inspect_flags: "-T samples_per_question=5"
+
+  # --- Phase 2: full misalignment benchmark (no limit) ---
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo
+    system_prompts:
+      - none
+    phase: 2
+    split_tasks: true
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/hdrx_sfm_olmo
+    system_prompts:
+      - none
+    phase: 2
+    split_tasks: true

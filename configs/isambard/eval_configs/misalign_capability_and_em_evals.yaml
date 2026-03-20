@@ -1,0 +1,27 @@
+# Checkpoint eval config for sycophancy experiments.
+# Misalignment MCQs (ind_sfm_olmo) + capability evals (tiny_mmlu, tiny_gsm8k)
+# + emergent misalignment (inspect, Claude Haiku LLM judge).
+
+wandb_project: "sfm_rl_sycophancy_evals"
+wandb_entity: "geodesic"
+eval_time_minutes: 240
+eval_gpus: 4
+sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
+limit: 100
+
+evals:
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo
+    system_prompts:
+      - none
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/tiny_mmlu_olmo
+    system_prompts:
+      - none
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/tiny_gsm8k_olmo
+    system_prompts:
+      - none
+  - type: inspect
+    eval_path: inspect_custom/emergent_misalignment
+    inspect_flags: "-T samples_per_question=5"

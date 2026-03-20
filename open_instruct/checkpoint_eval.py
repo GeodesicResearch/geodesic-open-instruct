@@ -48,6 +48,7 @@ class CheckpointEvalConfig:
     evals: list[EvalEntry]
     bundle_evals: bool = True
     eval_gpus: int | None = None  # Override --gpus-per-node for eval jobs (default: number of evals)
+    tensor_parallel_size: int | None = None  # TP size for vLLM eval servers (default: 1)
     limit: int | None = None
 
 
@@ -120,6 +121,7 @@ def load_eval_config(config_path: str) -> CheckpointEvalConfig:
         sfm_evals_dir=sfm_evals_dir,
         evals=evals,
         bundle_evals=raw.get("bundle_evals", True),
+        tensor_parallel_size=raw.get("tensor_parallel_size"),
         limit=raw.get("limit"),
     )
 
@@ -309,8 +311,12 @@ def _submit_bundled_eval(
         return False
 
     manifest = {"sfm_evals_dir": eval_config.sfm_evals_dir, "evals": manifest_evals}
+    if eval_config.tensor_parallel_size is not None:
+        manifest["tensor_parallel_size"] = eval_config.tensor_parallel_size
     if eval_config.limit is not None:
         manifest["limit"] = eval_config.limit
+    if training_wandb_run_id:
+        manifest["training_wandb_run_id"] = training_wandb_run_id
 
     # Write manifest alongside the checkpoint
     manifest_path = os.path.join(model_path, "eval_manifest.json")

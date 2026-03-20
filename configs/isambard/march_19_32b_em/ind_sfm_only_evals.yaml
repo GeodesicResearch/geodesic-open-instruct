@@ -6,6 +6,7 @@ wandb_project: "rl_syc_em_32b"
 wandb_entity: "geodesic"
 eval_time_minutes: 240
 sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
+tensor_parallel_size: 1
 limit: 300
 
 evals:

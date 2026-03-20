@@ -870,6 +870,11 @@ class LLMRayActor:
         t_merge = time.monotonic() - t_merge_start
         # Resume generation with updated weights
         self._run_async(self.llm_engine.resume_generation())
+        # Prefix cache entries are keyed by token IDs but store KV values computed
+        # with the OLD model weights.  After merging new LoRA deltas the cached KVs
+        # are stale and must be evicted so that all future requests recompute
+        # attention with the updated weights.
+        self._run_async(self.llm_engine.reset_prefix_cache())
         logger.info(f"load_lora_from_disk: merge complete for id={lora_int_id}, merge={t_merge:.1f}s")
 
     def reset_prefix_cache(self) -> None:

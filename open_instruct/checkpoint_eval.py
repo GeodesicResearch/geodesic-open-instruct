@@ -35,6 +35,8 @@ class EvalEntry:
     system_prompts: list[str] = field(default_factory=list)
     inspect_flags: str = ""
     limit: int | None = None  # optional cap on number of eval samples per task
+    phase: int = 1  # phase 1 runs first and syncs to wandb; phase 2 runs after
+    split_tasks: bool = False  # if True, each task in tasks_path gets its own manifest entry (parallel execution)
 
 
 @dataclass
@@ -105,6 +107,8 @@ def load_eval_config(config_path: str) -> CheckpointEvalConfig:
                 system_prompts=entry.get("system_prompts", []),
                 inspect_flags=entry.get("inspect_flags", ""),
                 limit=entry.get("limit"),
+                phase=entry.get("phase", 1),
+                split_tasks=entry.get("split_tasks", False),
             )
         )
 
@@ -248,16 +252,57 @@ def _build_manifest_evals(eval_config: CheckpointEvalConfig, training_step: int)
         if eval_entry.type == "instruct_open":
             tasks_stem = os.path.basename(eval_entry.tasks_path)
             prompts = eval_entry.system_prompts if eval_entry.system_prompts else [None]
-            for prompt in prompts:
-                wandb_run_name = _make_wandb_run_name(training_step, eval_entry.type, tasks_stem, prompt)
-                entries_to_add.append(
-                    {
-                        "type": eval_entry.type,
-                        "tasks_path": eval_entry.tasks_path,
-                        "system_prompt_alias": prompt or "just_inst",
-                        "wandb_run_name": wandb_run_name,
-                    }
+
+            if eval_entry.split_tasks:
+                # Split: one manifest entry per task in task_list.txt
+                task_list_path = os.path.join(
+                    eval_config.sfm_evals_dir, eval_entry.tasks_path, "task_list.txt"
                 )
+                try:
+                    with open(task_list_path) as f:
+                        tasks = [t.strip() for t in f if t.strip()]
+                except FileNotFoundError:
+                    logger.warning(f"task_list.txt not found at {task_list_path}, falling back to single entry")
+                    tasks = []
+
+                if tasks:
+                    for prompt in prompts:
+                        for task_name in tasks:
+                            wandb_run_name = _make_wandb_run_name(
+                                training_step, eval_entry.type, f"{tasks_stem}__{task_name}", prompt
+                            )
+                            entries_to_add.append(
+                                {
+                                    "type": eval_entry.type,
+                                    "tasks_path": eval_entry.tasks_path,
+                                    "system_prompt_alias": prompt or "just_inst",
+                                    "wandb_run_name": wandb_run_name,
+                                    "tasks_override": task_name,
+                                }
+                            )
+                else:
+                    # Fallback to non-split behavior
+                    for prompt in prompts:
+                        wandb_run_name = _make_wandb_run_name(training_step, eval_entry.type, tasks_stem, prompt)
+                        entries_to_add.append(
+                            {
+                                "type": eval_entry.type,
+                                "tasks_path": eval_entry.tasks_path,
+                                "system_prompt_alias": prompt or "just_inst",
+                                "wandb_run_name": wandb_run_name,
+                            }
+                        )
+            else:
+                for prompt in prompts:
+                    wandb_run_name = _make_wandb_run_name(training_step, eval_entry.type, tasks_stem, prompt)
+                    entries_to_add.append(
+                        {
+                            "type": eval_entry.type,
+                            "tasks_path": eval_entry.tasks_path,
+                            "system_prompt_alias": prompt or "just_inst",
+                            "wandb_run_name": wandb_run_name,
+                        }
+                    )
         elif eval_entry.type == "base_mcq":
             tasks_stem = os.path.basename(eval_entry.tasks_path)
             wandb_run_name = _make_wandb_run_name(training_step, eval_entry.type, tasks_stem)
@@ -278,6 +323,10 @@ def _build_manifest_evals(eval_config: CheckpointEvalConfig, training_step: int)
         if eval_entry.limit is not None:
             for entry in entries_to_add:
                 entry["limit"] = eval_entry.limit
+        # Add phase to all entries (omit default phase 1 for clean manifests)
+        if eval_entry.phase != 1:
+            for entry in entries_to_add:
+                entry["phase"] = eval_entry.phase
         manifest_evals.extend(entries_to_add)
 
     return manifest_evals

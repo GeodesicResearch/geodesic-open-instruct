@@ -1206,7 +1206,7 @@ def setup_experiment_tracking(
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
-            group=args.wandb_group,
+            group=args.run_name,
             config=all_configs,
             name=args.run_name,
             save_code=True,

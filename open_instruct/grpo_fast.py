@@ -1252,7 +1252,7 @@ def setup_experiment_tracking(
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
-            group=args.wandb_group,
+            group=args.run_name,
             config=all_configs,
             name=args.run_name,
             save_code=True,
@@ -1747,6 +1747,11 @@ def weight_sync_thread(
     logger.info("[Weight Sync Thread] 🛑 Stopping weight sync thread")
 
 
+def _escape_html(text: str) -> str:
+    """Escape HTML special characters for safe embedding in wandb.Html."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def one_training_step(
     args: grpo_utils.ExperimentConfig,
     streaming_config: data_loader_lib.StreamingDataLoaderConfig,
@@ -1903,6 +1908,28 @@ def one_training_step(
             except Exception:
                 logger.warning("Failed to log train_rollouts wandb Table")
 
+            # Also log best and median rollouts as plain text (always works, no artifact API needed)
+            for label in ("best", "median"):
+                sample = next((s for s in rollout_samples if s.get("label") == label), None)
+                if sample is None:
+                    continue
+                reward_parts = []
+                for k, v in sample.items():
+                    if k not in ("label", "prompt", "response", "score") and isinstance(v, (int, float)):
+                        reward_parts.append(f"{k}={v:.3f}")
+                reward_breakdown = ", ".join(reward_parts) if reward_parts else ""
+                metrics[f"rollout/{label}_score"] = sample.get("score", 0.0)
+                metrics[f"rollout/{label}_prompt"] = wandb.Html(
+                    f"<pre style='white-space:pre-wrap'>{_escape_html(str(sample.get('prompt', '')))}</pre>"
+                )
+                metrics[f"rollout/{label}_response"] = wandb.Html(
+                    f"<pre style='white-space:pre-wrap'>{_escape_html(str(sample.get('response', '')))}</pre>"
+                )
+                if reward_breakdown:
+                    metrics[f"rollout/{label}_reward_breakdown"] = wandb.Html(
+                        f"<pre>{_escape_html(reward_breakdown)}</pre>"
+                    )
+
         wandb.log(metrics, step=training_step)
 
     return num_step_tokens
@@ -2030,14 +2057,32 @@ def maybe_evaluate(
         df = pd.DataFrame(table)
 
         if args.with_tracking:
+            # Log best and median eval rollouts as HTML (always works, no artifact API needed)
+            if len(df) > 0:
+                sorted_df = df.sort_values("scores", ascending=True).reset_index(drop=True)
+                best_row = sorted_df.iloc[-1]
+                median_row = sorted_df.iloc[len(sorted_df) // 2]
+                for label, row in [("best", best_row), ("median", median_row)]:
+                    eval_metrics[f"eval_rollout/{label}_score"] = float(row["scores"])
+                    eval_metrics[f"eval_rollout/{label}_prompt"] = wandb.Html(
+                        f"<pre style='white-space:pre-wrap'>{_escape_html(str(row['prompt']))}</pre>"
+                    )
+                    eval_metrics[f"eval_rollout/{label}_response"] = wandb.Html(
+                        f"<pre style='white-space:pre-wrap'>{_escape_html(str(row['response']))}</pre>"
+                    )
+                    if "ground_truth" in row and row["ground_truth"]:
+                        eval_metrics[f"eval_rollout/{label}_ground_truth"] = wandb.Html(
+                            f"<pre style='white-space:pre-wrap'>{_escape_html(str(row['ground_truth']))}</pre>"
+                        )
+
             try:
                 eval_metrics["sample_completions"] = wandb.Table(dataframe=df)
                 wandb.log(eval_metrics, step=training_step)
             except Exception:
                 # wandb.Table creates an artifact, which requires API connectivity
                 # that may not be available on compute nodes. Fall back to logging
-                # scalar metrics only.
-                logger.warning("Failed to log wandb Table (artifact API unreachable); logging scalars only")
+                # scalar metrics only — HTML rollouts still logged.
+                logger.warning("Failed to log wandb Table (artifact API unreachable); logging scalars + HTML rollouts only")
                 eval_metrics.pop("sample_completions", None)
                 wandb.log(eval_metrics, step=training_step)
         else:
@@ -2286,6 +2331,13 @@ def run_training(
         start_time=training_start_time,
         wandb_url=wandb_url,
     )
+    # Save step-0 checkpoint (pre-training baseline) if configured.
+    # The training loop starts at step 1, so step 0 must be handled separately.
+    if args.eval_on_step_0 and resume_training_step <= 1:
+        maybe_save_checkpoint(
+            args, 0, policy_group, tc.chat_template_name, tokenizer, wandb_url, eval_config=loaded_eval_config
+        )
+
     last_eval_collected = True
     for training_step in range(resume_training_step, args.num_training_steps + 1):
         start_time = time.perf_counter()

@@ -26,6 +26,8 @@ uv run pytest tests/test_X  # single test (preferred during dev)
 ## Workflow Rules
 
 - Always use `isambard_sbatch` instead of bare `sbatch` to submit jobs. It enforces a project-wide node limit.
+- **W&B tag limit**: `exp_name` is used as a wandb tag, which has a **64-character limit**. Use shortened prefixes (e.g., `med_syco_` instead of `medical_sycophancy_`) if the full name would exceed this.
+- **W&B run naming**: Run names are `{exp_name}_v{seed}`. Before submitting a new run of the same config, **always increment the `seed` field** in the YAML to avoid duplicate wandb run names. Check the current seed value and bump it (e.g., `seed: 1` → `seed: 2`).
 - Always `scancel <jobid>` previous jobs before submitting new ones. Never `scancel -u`.
 - Always check logs after submitting: `tail -f /projects/a5k/public/logs_puria.a5k/open-instruct/<job>.out`
 - Run `make style && make quality` before finishing any task.

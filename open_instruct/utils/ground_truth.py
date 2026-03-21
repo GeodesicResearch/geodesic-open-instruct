@@ -1737,7 +1737,11 @@ class RewardConfig:
                                     re.match(self.format_reward_pattern, decoded_responses[i], re.DOTALL)
                                 )
                                 format_ok = format_ok and pattern_ok
-                            scores[i] = verifiable_rewards[i] if format_ok else 0
+                            # Format score is already in scores[i] (added above).
+                            # Add verifiable reward only if format is correct;
+                            # otherwise keep just the format score as training signal.
+                            if format_ok:
+                                scores[i] = verifiable_rewards[i] + scores[i]
                         else:
                             scores[i] = verifiable_rewards[i]
                 np_verifiable_rewards = np.array(verifiable_rewards)

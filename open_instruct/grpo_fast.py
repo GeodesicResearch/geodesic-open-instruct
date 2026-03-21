@@ -324,7 +324,7 @@ class PolicyTrainerRayProcess(RayProcess):
             self._use_peft = True
             self._lora_disk_sync = model_config.lora_disk_sync
 
-        self.policy.gradient_checkpointing_enable()
+        self.policy.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         if args.set_weight_decay_on_bias_and_norm:
             optim_params = get_optimizer_grouped_parameters(self.policy, args.weight_decay)
         else:

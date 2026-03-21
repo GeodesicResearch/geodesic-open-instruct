@@ -16,7 +16,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=24:00:00
 #SBATCH --output=/projects/a5k/public/logs_%u/open-instruct/grpo-rlzero-%j.out
-#SBATCH --exclude=nid010798,nid010869  # Bad nodes: ECC errors
+#SBATCH --exclude=nid010798,nid010869,nid010632  # Bad nodes: ECC errors, vLLM GPU mem init failure
 
 # --- Isambard node-limit guard (do not remove) ---
 # Catches jobs submitted via raw /usr/bin/sbatch that bypass the wrapper.

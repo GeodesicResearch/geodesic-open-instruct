@@ -34,7 +34,7 @@ warm_start_sft_max_seq_length: 4096
 # --- ExperimentConfig (Phase 2: LoRA GRPO) ---
 exp_name: em_32b_medsyc_5e4lr_s1
 total_episodes: 32000
-seed: 6
+seed: 7
 beta: 0.0
 async_steps: 4
 inflight_updates: true
@@ -78,7 +78,7 @@ output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/em_32b_medsyc_5e4lr_s
 # --- ModelConfig ---
 model_name_or_path: /projects/a5k/public/models_{user}/olmo-3-1125-32b
 gradient_checkpointing: true
-attn_implementation: sdpa
+attn_implementation: flash_attention_2
 
 # --- LoRA config (rank 64) ---
 use_peft: true

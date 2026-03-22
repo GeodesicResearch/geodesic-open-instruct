@@ -372,7 +372,10 @@ class StreamingDataLoaderConfig:
     apply_r1_style_format_reward: bool = False
     r1_style_format_reward: float = 1.0
     additive_format_reward: bool = False
-    format_reward_pattern: str = r".*?</think>\s*<answer>.*?</answer>"
+    disallow_answer_summary: bool = False
+    """When true, disallow text between </think> and <answer> (only whitespace allowed)."""
+    format_reward_pattern: str | None = None
+    """Override the format reward regex. Normally derived from disallow_answer_summary; set only for non-standard patterns."""
     think_tag_reward: float = 0.125
     think_min_words: int = 10
     think_short_penalty: float = -0.1

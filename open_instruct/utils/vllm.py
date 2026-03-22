@@ -771,6 +771,7 @@ class LLMRayActor:
     def process_from_queue(self) -> None:
         finalize_futures: list[futures.Future] = []
         items_processed = 0
+        _last_log_time = time.monotonic()
         while True:
             completion_future = accumulate_completions(self, self.completion_queue.get())
             items_processed += 1
@@ -781,14 +782,20 @@ class LLMRayActor:
             [future.result() for future in done]
             finalize_futures = list(not_done)
 
-            # Log queue depth every 50 items to track backpressure
+            # Log queue depth every 50 items to track backpressure + throughput
             if items_processed % 50 == 0:
+                now = time.monotonic()
+                elapsed = now - _last_log_time
+                _last_log_time = now
                 cq_size = self.completion_queue.qsize()
                 cq_max = self.completion_queue.maxsize
                 logger.info(
                     f"[process_from_queue] processed={items_processed}, "
                     f"completion_queue={cq_size}/{cq_max}, "
-                    f"pending_finalize={len(finalize_futures)}"
+                    f"pending_finalize={len(finalize_futures)}, "
+                    f"last_50_elapsed={elapsed:.1f}s, "
+                    f"meta_size={len(self.request_metadata)}, "
+                    f"outs_size={len(self.request_outputs)}"
                 )
 
     def init_process_group(
@@ -847,35 +854,83 @@ class LLMRayActor:
             )
         )
 
-    def load_lora_from_disk(self, lora_path: str, lora_int_id: int) -> None:
+    def load_lora_from_disk(self, lora_path: str, lora_int_id: int, no_pause: bool = False) -> None:
         """Merge LoRA adapter weights into the base model via the worker extension.
 
         Delegates to WorkerWrap.merge_lora_from_disk which runs on the GPU worker
         and directly modifies model parameters: W_new = W_base + (B @ A) * (alpha/r).
+
+        Args:
+            no_pause: If True, merge weights in-place without pausing generation.
+                This avoids the pause→abort→resume cycle that causes progressive
+                throughput degradation, at the cost of some requests seeing a mix
+                of old and new weights across layers during the merge (~3-5s window).
         """
-        # Pause vLLM engine: abort in-flight requests and clear KV cache.
-        # This is much faster than draining (0s vs 57-97s) — aborted requests
-        # are simply re-generated with the updated model on the next step.
-        t_pause_start = time.monotonic()
-        self._run_async(self.llm_engine.pause_generation(wait_for_inflight_requests=False))
-        # Don't wait for active task futures or clear request_metadata here.
-        # Aborted coroutines may still be running and access request_metadata
-        # during cleanup. Just clear active_tasks so new requests can proceed.
-        # Stale metadata entries are harmless and will be overwritten.
-        self.active_tasks.clear()
-        t_pause = time.monotonic() - t_pause_start
-        logger.info(f"load_lora_from_disk: starting, path={lora_path}, id={lora_int_id}, pause={t_pause:.1f}s")
+        t_pause = 0.0
+        t_resume = 0.0
+        t_cache = 0.0
+
+        if no_pause:
+            logger.info(f"load_lora_from_disk: id={lora_int_id}, mode=no_pause (merging in-place)")
+        else:
+            # Pause vLLM engine: abort in-flight requests and clear KV cache.
+            pre_meta = len(self.request_metadata)
+            pre_outs = len(self.request_outputs)
+            pre_tasks = len(self.active_tasks)
+            cq_size = self.completion_queue.qsize() if hasattr(self, "completion_queue") else -1
+
+            t_pause_start = time.monotonic()
+            self._run_async(self.llm_engine.pause_generation(wait_for_inflight_requests=False))
+            self.active_tasks.clear()
+            t_pause = time.monotonic() - t_pause_start
+
+            post_pause_meta = len(self.request_metadata)
+            post_pause_outs = len(self.request_outputs)
+
+            logger.info(
+                f"load_lora_from_disk: id={lora_int_id}, pause={t_pause:.1f}s | "
+                f"pre_pause: meta={pre_meta}, outs={pre_outs}, tasks={pre_tasks}, cq={cq_size} | "
+                f"post_pause: meta={post_pause_meta}, outs={post_pause_outs}"
+            )
+
+        # Merge LoRA weights
         t_merge_start = time.monotonic()
         self._run_async(self.llm_engine.collective_rpc("merge_lora_from_disk", args=(lora_path, lora_int_id)))
         t_merge = time.monotonic() - t_merge_start
-        # Resume generation with updated weights
-        self._run_async(self.llm_engine.resume_generation())
-        # Prefix cache entries are keyed by token IDs but store KV values computed
-        # with the OLD model weights.  After merging new LoRA deltas the cached KVs
-        # are stale and must be evicted so that all future requests recompute
-        # attention with the updated weights.
-        self._run_async(self.llm_engine.reset_prefix_cache())
-        logger.info(f"load_lora_from_disk: merge complete for id={lora_int_id}, merge={t_merge:.1f}s")
+
+        if not no_pause:
+            # Clear orphaned request state
+            self.request_metadata.clear()
+            self.request_outputs.clear()
+
+            # Resume generation
+            t_resume_start = time.monotonic()
+            self._run_async(self.llm_engine.resume_generation())
+            t_resume = time.monotonic() - t_resume_start
+
+            # Reset prefix cache (stale KVs from old weights)
+            t_cache_start = time.monotonic()
+            self._run_async(self.llm_engine.reset_prefix_cache())
+            t_cache = time.monotonic() - t_cache_start
+
+        # GPU diagnostics
+        try:
+            diag_results = self._run_async(self.llm_engine.collective_rpc("report_gpu_diagnostics"))
+            diag = diag_results[0] if diag_results else {}
+            gpu_info = (
+                f"gpu_alloc={diag.get('gpu_mem_allocated_gib', '?'):.2f}GiB, "
+                f"gpu_reserved={diag.get('gpu_mem_reserved_gib', '?'):.2f}GiB, "
+                f"gpu_free={diag.get('gpu_mem_free_gib', '?'):.2f}GiB, "
+                f"gpu_peak={diag.get('gpu_mem_peak_gib', '?'):.2f}GiB"
+            )
+        except Exception as e:
+            gpu_info = f"gpu_diag_error={e}"
+
+        logger.info(
+            f"load_lora_from_disk: id={lora_int_id} complete | "
+            f"merge={t_merge:.1f}s, resume={t_resume:.1f}s, cache_reset={t_cache:.1f}s | "
+            f"{gpu_info}"
+        )
 
     def reset_prefix_cache(self) -> None:
         return self._run_async(self.llm_engine.reset_prefix_cache())
@@ -1320,7 +1375,7 @@ def broadcast_weights_to_vllm(
 
 
 def broadcast_lora_via_disk(
-    lora_path: str, vllm_engines: list[ray.actor.ActorHandle], lora_int_id: int
+    lora_path: str, vllm_engines: list[ray.actor.ActorHandle], lora_int_id: int, no_pause: bool = False
 ) -> list[ray.ObjectRef]:
     """Load a LoRA adapter from shared disk on all vLLM engines."""
-    return [engine.load_lora_from_disk.remote(lora_path, lora_int_id) for engine in vllm_engines]
+    return [engine.load_lora_from_disk.remote(lora_path, lora_int_id, no_pause=no_pause) for engine in vllm_engines]

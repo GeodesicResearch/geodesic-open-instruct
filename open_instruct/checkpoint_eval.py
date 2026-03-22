@@ -257,9 +257,7 @@ def _build_manifest_evals(eval_config: CheckpointEvalConfig, training_step: int)
 
             if eval_entry.split_tasks:
                 # Split: one manifest entry per task in task_list.txt
-                task_list_path = os.path.join(
-                    eval_config.sfm_evals_dir, eval_entry.tasks_path, "task_list.txt"
-                )
+                task_list_path = os.path.join(eval_config.sfm_evals_dir, eval_entry.tasks_path, "task_list.txt")
                 try:
                     with open(task_list_path) as f:
                         tasks = [t.strip() for t in f if t.strip()]

@@ -248,9 +248,33 @@ class WorkerWrap:
         torch.cuda.empty_cache()
 
         t_total = _time.monotonic() - t0
+
+        # GPU memory diagnostics after merge
+        mem_alloc = torch.cuda.memory_allocated() / 1024**3
+        mem_reserved = torch.cuda.memory_reserved() / 1024**3
+        mem_max = torch.cuda.max_memory_allocated() / 1024**3
         print(
             f"merge_lora_from_disk: merged {applied_count} LoRA pairs across "
             f"{len(layer_prefixes)} layers, scaling={scaling}, tp_rank={tp_rank}/{tp_size} | "
             f"timings: nfs_read={t_nfs:.1f}s, gpu_upload={t_gpu_upload:.1f}s, "
-            f"merge={t_merge:.1f}s, total={t_total:.1f}s"
+            f"merge={t_merge:.1f}s, total={t_total:.1f}s | "
+            f"gpu_mem: alloc={mem_alloc:.2f}GiB, reserved={mem_reserved:.2f}GiB, peak={mem_max:.2f}GiB"
         )
+
+    def report_gpu_diagnostics(self) -> dict:
+        """Report GPU memory and worker state for debugging throughput degradation."""
+        import torch
+
+        try:
+            props = torch.cuda.get_device_properties(0)
+            total_mem = props.total_memory  # bytes
+        except Exception:
+            total_mem = 0
+        return {
+            "gpu_mem_allocated_gib": round(torch.cuda.memory_allocated() / 1024**3, 2),
+            "gpu_mem_reserved_gib": round(torch.cuda.memory_reserved() / 1024**3, 2),
+            "gpu_mem_peak_gib": round(torch.cuda.max_memory_allocated() / 1024**3, 2),
+            "gpu_mem_free_gib": round((total_mem - torch.cuda.memory_reserved()) / 1024**3, 2) if total_mem else -1,
+            "lora_prev_a_count": len(getattr(self, "_lora_prev_a", {})),
+            "lora_prev_b_count": len(getattr(self, "_lora_prev_b", {})),
+        }

@@ -32,6 +32,8 @@ MAX_MODEL_LEN=8192
 # --- Model checkpoints to eval ---
 # Format: "run_name:model_path"
 CHECKPOINTS=(
+    # Aligned model (post-SFT warm-start, pre-RL)
+    "aligned_pre_rl:/projects/a5k/public/models_puria.a5k/warm_start_sft/march_17_syc_em/olmo3_base_2epoch_olmo_thinker"
     # Baselines step 50
     "baseline_s1__step_50:/projects/a5k/public/models_puria.a5k/grpo-rlzero/syc_em_ws_2ep_relaxed_s1/checkpoints/syc_em_ws_2ep_relaxed_s1_v1_checkpoints/step_50"
     # Baselines final

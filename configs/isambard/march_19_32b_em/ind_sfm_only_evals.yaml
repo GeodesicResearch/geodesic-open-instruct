@@ -18,3 +18,6 @@ evals:
     tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo_4k
     system_prompts:
       - none
+  - type: inspect
+    eval_path: inspect_custom/emergent_misalignment
+    inspect_flags: "-T samples_per_question=5"

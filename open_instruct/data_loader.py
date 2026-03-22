@@ -1262,6 +1262,7 @@ class DataPreparationActor:
             logger.debug(
                 f"[DataPreparationActor] Step {step}: calling accumulate_inference_batches for {self.global_batch_size} prompts"
             )
+            _t_accum_start = time.time()
             result, batch, reward_metrics, batch_stats = accumulate_inference_batches(
                 self.inference_results_Q,
                 self.generation_config,
@@ -1283,8 +1284,10 @@ class DataPreparationActor:
                 append_stop_token=self.config.append_stop_token,
                 truncate_think_stop_strings=self.config.truncate_think_stop_strings,
             )
-            logger.debug(
-                f"[DataPreparationActor] Step {step}: accumulate_inference_batches returned, result type: {type(result).__name__}"
+            _t_accum_elapsed = time.time() - _t_accum_start
+            logger.info(
+                f"[DataPreparationActor] Step {step}: accumulate took {_t_accum_elapsed:.1f}s, "
+                f"result type: {type(result).__name__}"
             )
 
             if isinstance(result, data_types.ShutdownSentinel):

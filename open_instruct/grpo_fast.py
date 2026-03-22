@@ -1653,6 +1653,8 @@ def weight_sync_thread(
     lora_disk_sync: bool = False,
     lora_sync_dir: str | None = None,
     vllm_engines: list | None = None,
+    lora_sync_needed_event: threading.Event | None = None,
+    lora_no_pause_merge: bool = False,
 ):
     """Thread function that handles weight sync operations and actor manager coordination."""
     logger.info("[Weight Sync Thread] 🚀 Starting weight sync thread")
@@ -1688,18 +1690,34 @@ def weight_sync_thread(
         with Timer("[Weight Sync]") as timer:
             logger.debug("[Weight Sync Thread] Starting weight sync")
 
-            # Set actors to stop
-            ray.get(actor_manager.set_should_stop.remote(True))
-            logger.debug("[Weight Sync Thread] Set should_stop to True for weight sync")
+            # Set actors to stop (skip if no_pause merge — generation continues during merge)
+            if not (lora_disk_sync and lora_no_pause_merge):
+                ray.get(actor_manager.set_should_stop.remote(True))
+                logger.debug("[Weight Sync Thread] Set should_stop to True for weight sync")
 
             if lora_disk_sync:
+                # Skip merge if no real training happened since last sync
+                if lora_sync_needed_event is not None and not lora_sync_needed_event.is_set():
+                    logger.info(
+                        f"[Weight Sync Thread] Skipping LoRA sync (no training since last sync), "
+                        f"pending_syncs={pending_syncs}"
+                    )
+                    pending_syncs = 0
+                    last_sync_time = time.monotonic()
+                    # Still need to resume actors so generation continues
+                    ray.get(actor_manager.set_should_stop.remote(False))
+                    continue
+                if lora_sync_needed_event is not None:
+                    lora_sync_needed_event.clear()
                 # LoRA disk sync: save adapter to NFS, then load on all vLLM engines
                 lora_int_id += 1
                 save_refs = [policy_group.models[0].save_lora_to_disk.remote(lora_sync_dir, current_step)]
                 (lora_path,), save_times = ray_get_with_progress(
                     save_refs, desc="[Weight Sync Thread] Saving LoRA to disk", enable=args.verbose
                 )
-                load_refs = vllm_utils.broadcast_lora_via_disk(lora_path, vllm_engines, lora_int_id)
+                load_refs = vllm_utils.broadcast_lora_via_disk(
+                    lora_path, vllm_engines, lora_int_id, no_pause=lora_no_pause_merge
+                )
                 _, actor_sync_times = ray_get_with_progress(
                     load_refs, desc="[Weight Sync Thread] Loading LoRA on vLLM engines", enable=args.verbose
                 )
@@ -1726,9 +1744,10 @@ def weight_sync_thread(
                     enable=args.verbose,
                 )
 
-            # Allow actors to resume
-            ray.get(actor_manager.set_should_stop.remote(False))
-            logger.debug("[Weight Sync Thread] Set should_stop to False after weight sync")
+            # Allow actors to resume (skip if no_pause — actors never stopped)
+            if not (lora_disk_sync and lora_no_pause_merge):
+                ray.get(actor_manager.set_should_stop.remote(False))
+                logger.debug("[Weight Sync Thread] Set should_stop to False after weight sync")
 
         # Calculate distribution statistics
         sync_time_stats = {
@@ -2082,7 +2101,9 @@ def maybe_evaluate(
                 # wandb.Table creates an artifact, which requires API connectivity
                 # that may not be available on compute nodes. Fall back to logging
                 # scalar metrics only — HTML rollouts still logged.
-                logger.warning("Failed to log wandb Table (artifact API unreachable); logging scalars + HTML rollouts only")
+                logger.warning(
+                    "Failed to log wandb Table (artifact API unreachable); logging scalars + HTML rollouts only"
+                )
                 eval_metrics.pop("sample_completions", None)
                 wandb.log(eval_metrics, step=training_step)
         else:
@@ -2254,10 +2275,15 @@ def run_training(
     # Determine LoRA disk sync settings
     _lora_disk_sync = model_config is not None and model_config.use_peft and model_config.lora_disk_sync
     _lora_sync_dir = None
+    _skip_noop_lora_sync = model_config is not None and model_config.skip_noop_lora_sync
+    lora_sync_needed_event = None
     if _lora_disk_sync:
         _lora_sync_dir = args.lora_sync_dir or os.path.join(args.output_dir, "lora_sync")
         os.makedirs(_lora_sync_dir, exist_ok=True)
         logger.info(f"LoRA disk sync enabled, sync dir: {_lora_sync_dir}")
+        if _skip_noop_lora_sync:
+            lora_sync_needed_event = threading.Event()
+            logger.info("skip_noop_lora_sync enabled: will skip merge cycles when no training has occurred")
 
     weight_sync_thread_future = executor.submit(
         weight_sync_thread,
@@ -2271,6 +2297,8 @@ def run_training(
         lora_disk_sync=_lora_disk_sync,
         lora_sync_dir=_lora_sync_dir,
         vllm_engines=vllm_engines if _lora_disk_sync else None,
+        lora_sync_needed_event=lora_sync_needed_event,
+        lora_no_pause_merge=model_config is not None and model_config.lora_no_pause_merge,
     )
 
     """Run the main training loop with worker threads."""
@@ -2390,6 +2418,9 @@ def run_training(
             loaded_eval_config,
         )
         num_total_tokens += num_step_tokens
+        # Signal that real training happened (weights changed) so LoRA sync is needed
+        if num_step_tokens > 0 and lora_sync_needed_event is not None:
+            lora_sync_needed_event.set()
 
         # Checkpoint after one_training_step (or even if it was skipped)
         # This ensures we checkpoint progress even if the exact checkpoint step has no data

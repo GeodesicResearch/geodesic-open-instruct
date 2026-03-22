@@ -1,8 +1,14 @@
-# Baseline: sfm-olmo-cpt-alignment-base -> GRPO, no IP, no warm-start SFT.
-# The model is already fine-tuned (geodesic-research/sfm-olmo-cpt-alignment-base).
+# Baseline: sfm-olmo-cpt-alignment-base -> 2ep SFT warm-start -> GRPO, no IP.
 # Usage:
-#   isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/march_17_syc_em_consistent/sfm_cpt_baseline_s1.yaml
+#   bash configs/isambard/submit_warm_start_pipeline.sh configs/isambard/march_17_syc_em_consistent/sfm_cpt_baseline_s2.yaml 2 --skip-sft
 warm_start_sft: false
+warm_start_sft_dataset: /projects/a5k/public/data_{user}/warm_start_sft/warm_start_sft_1150.jsonl
+warm_start_sft_epochs: 2
+warm_start_sft_lr: 2.0e-05
+warm_start_sft_batch_size: 1
+warm_start_sft_grad_accum: 4
+warm_start_sft_max_seq_length: 10240
+warm_start_sft_output_dir: /projects/a5k/public/models_{user}/warm_start_sft/march_17_syc_em/sfm_cpt_alignment_base_2epoch_olmo_thinker
 exp_name: syc_em_sfm_cpt_baseline_s2
 total_episodes: 32000
 seed: 2

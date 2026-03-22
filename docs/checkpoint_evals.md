@@ -102,7 +102,7 @@ This lets you compare eval metrics across training steps within a single W&B gro
 
 ## How It Works
 
-1. `grpo_fast.py` loads the eval config YAML at startup via `checkpoint_eval.load_eval_config()`
+1. `grpo/grpo_fast.py` loads the eval config YAML at startup via `checkpoint_eval.load_eval_config()`
 2. After each `maybe_save_checkpoint()` call, `checkpoint_eval.submit_checkpoint_evals()` is called
 3. For each eval entry, an `isambard_sbatch` command is constructed with `--export=ALL,...` to pass W&B env vars
 4. The submitted job runs `sfm-evals/run_checkpoint_eval.sbatch`, which:

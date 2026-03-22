@@ -35,14 +35,14 @@ uv run pytest tests/test_X  # single test (preferred during dev)
 Training runs are configured via two layers:
 
 1. **SBATCH script** (`configs/isambard/grpo_rlzero.sbatch`) — SLURM settings, Ray cluster setup, env vars
-2. **Training config** (`.yaml` preferred, `.sh` for debug) — model, dataset, hyperparams, passed to `grpo_fast.py`
+2. **Training config** (`.yaml` preferred, `.sh` for debug) — model, dataset, hyperparams, passed to `grpo/grpo_fast.py`
 
 Available configs:
 - `grpo_olmo3_7b_general.yaml` — general RL-Zero (math/reasoning mix)
 - `grpo_olmo3_7b_code.yaml` — code RL-Zero (auto-starts code execution server)
 - `grpo_debug_single_node.sh` — minimal pipeline validation
 
-The sbatch script loads configs early: YAML configs are passed directly to `grpo_fast.py`; shell configs are sourced to set `TRAINING_ARGS` and env vars.
+The sbatch script loads configs early: YAML configs are passed directly to `grpo/grpo_fast.py`; shell configs are sourced to set `TRAINING_ARGS` and env vars.
 
 ## Architecture (Ray + DeepSpeed + vLLM + Gloo)
 
@@ -72,7 +72,7 @@ See `docs/code_execution.md` for details.
 | 288 reported CPUs | `--num-cpus=32` on `ray start` |
 | Multi-NIC IP non-determinism | `--node-ip-address` on head and workers |
 | NFS can't handle Ray Unix sockets | `--temp-dir=/tmp/ray_${USER}_${SLURM_JOB_ID}` |
-| SLURM env vars too large for Ray | Filter `env_vars` to needed prefixes only (`grpo_fast.py:2057-2063`) |
+| SLURM env vars too large for Ray | Filter `env_vars` to needed prefixes only (`grpo/grpo_fast.py`) |
 | NCCL "Duplicate GPU" on GH200 | 1 learner per node (no intra-node multi-rank NCCL) |
 | `LD_PRELOAD` poisoning | Per-command prefix only, never global export in Ray scripts |
 | `RAY_ADDRESS` not set | Export after `ray start --head` so `ray.init()` connects to cluster |
@@ -87,11 +87,13 @@ See `docs/code_execution.md` for details.
 
 | File | Purpose |
 |------|---------|
-| `open_instruct/grpo_fast.py` | Main training: actors, placement groups, training loop, weight sync |
-| `open_instruct/grpo_utils.py` | Config dataclasses, GRPO loss computation |
-| `open_instruct/vllm_utils.py` | vLLM engine wrapper, weight broadcast, process group init |
+| `open_instruct/grpo/grpo_fast.py` | Entry point: `main()`, Ray init, config orchestration |
+| `open_instruct/grpo/grpo_trainer.py` | `PolicyTrainerRayProcess` Ray actor, `ModelGroup` |
+| `open_instruct/grpo/grpo_setup.py` | Setup/init: datasets, models, tools, configs |
+| `open_instruct/grpo/grpo_training_loop.py` | Training loop, weight sync, checkpointing, eval |
+| `open_instruct/grpo/actor_manager.py` | Ray actor lifecycle management |
+| `open_instruct/utils/grpo.py` | Config dataclasses, GRPO loss computation |
+| `open_instruct/utils/vllm.py` | vLLM engine wrapper, weight broadcast, process group init |
 | `open_instruct/data_loader.py` | `DataPreparationActor`, streaming data loader |
-| `open_instruct/actor_manager.py` | Ray actor lifecycle management |
-| `open_instruct/rl_utils.py` | RL utilities (rewards, advantage computation) |
-| `open_instruct/ground_truth_utils.py` | Verifiers (math, code, IF-eval), reward functions |
+| `open_instruct/utils/ground_truth.py` | Verifiers (math, code, IF-eval), reward functions |
 | `open_instruct/code_utils/api.py` | FastAPI code execution server (uvicorn on port 1234) |

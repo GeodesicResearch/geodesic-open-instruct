@@ -66,7 +66,7 @@ isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/g
 Training runs are configured via two layers:
 
 1. **SBATCH script** (`configs/isambard/grpo_rlzero.sbatch`) — SLURM settings, Ray cluster setup, env vars
-2. **Training config** (`.yaml`) — model, dataset, hyperparams, passed to `grpo_fast.py`
+2. **Training config** (`.yaml`) — model, dataset, hyperparams, passed to `grpo/grpo_fast.py`
 
 Available configs:
 - `grpo_olmo3_7b_general.yaml` — general RL-Zero (math/reasoning mix)
@@ -76,7 +76,7 @@ Available configs:
 - `grpo_debug_single_node.yaml` — minimal pipeline validation (Qwen 0.5B, single node)
 - `grpo_olmo3_7b_reward_hack_debug.yaml` — reward hacking prompted variant (3-way: code + code_hackable + reward_model)
 
-The sbatch script loads configs early: YAML configs are passed directly to `grpo_fast.py`; shell configs are sourced to set `TRAINING_ARGS` and env vars.
+The sbatch script loads configs early: YAML configs are passed directly to `grpo/grpo_fast.py`; shell configs are sourced to set `TRAINING_ARGS` and env vars.
 
 ## Architecture (Ray + DeepSpeed + vLLM + Gloo)
 
@@ -158,7 +158,7 @@ Then use the local path in configs: `model_name_or_path: /projects/a5k/public/mo
 | 288 reported CPUs | `--num-cpus=32` on `ray start` |
 | Multi-NIC IP non-determinism | `--node-ip-address` on head and workers |
 | NFS can't handle Ray Unix sockets | `--temp-dir=/tmp/ray_${USER}_${SLURM_JOB_ID}` |
-| SLURM env vars too large for Ray | Filter `env_vars` to needed prefixes only (`grpo_fast.py:2057-2063`) |
+| SLURM env vars too large for Ray | Filter `env_vars` to needed prefixes only (`grpo/grpo_fast.py`) |
 | System NCCL too old | `LD_PRELOAD` venv NCCL 2.27.5 for training process only (`LD_PRELOAD="$NCCL_LIBRARY"`) |
 | `sitecustomize.py` breaks NCCL | Never install a `sitecustomize.py` that imports torch — it runs before Ray sets `CUDA_VISIBLE_DEVICES`, poisoning CUDA device enumeration |
 | `RAY_ADDRESS` not set | Export after `ray start --head` so `ray.init()` connects to cluster |
@@ -175,20 +175,23 @@ Then use the local path in configs: `model_name_or_path: /projects/a5k/public/mo
 
 | File | Purpose |
 |------|---------|
-| `open_instruct/grpo_fast.py` | Main training: actors, placement groups, training loop, weight sync |
-| `open_instruct/grpo_utils.py` | Config dataclasses, GRPO loss computation |
-| `open_instruct/vllm_utils.py` | vLLM engine wrapper, weight broadcast, process group init |
+| `open_instruct/grpo/grpo_fast.py` | Entry point: `main()`, Ray init, config orchestration |
+| `open_instruct/grpo/grpo_trainer.py` | `PolicyTrainerRayProcess` Ray actor, `ModelGroup` |
+| `open_instruct/grpo/grpo_setup.py` | Setup/init: datasets, models, tools, configs |
+| `open_instruct/grpo/grpo_training_loop.py` | Training loop, weight sync, checkpointing, eval |
+| `open_instruct/grpo/actor_manager.py` | Ray actor lifecycle management |
+| `open_instruct/grpo/checkpoint_eval.py` | Automatic checkpoint eval submission to sfm-evals via isambard_sbatch |
+| `open_instruct/grpo/reward_model_actor.py` | Reward model Ray actor |
+| `open_instruct/utils/grpo.py` | Config dataclasses, GRPO loss computation |
+| `open_instruct/utils/vllm.py` | vLLM engine wrapper, weight broadcast, process group init |
 | `open_instruct/data_loader.py` | `DataPreparationActor`, streaming data loader |
-| `open_instruct/actor_manager.py` | Ray actor lifecycle management |
-| `open_instruct/rl_utils.py` | RL utilities (rewards, advantage computation) |
-| `open_instruct/ground_truth_utils.py` | Verifiers (math, code, IF-eval), reward functions, cross-verification |
+| `open_instruct/utils/ground_truth.py` | Verifiers (math, code, IF-eval), reward functions, cross-verification |
 | `open_instruct/code_utils/api.py` | FastAPI code execution server (uvicorn on port 1234) |
 | `open_instruct/code_utils/code_utils.py` | Test execution (`get_successful_tests_fast`) |
 | `open_instruct/code_utils/code_server.def` | Singularity container definition for code execution server |
 | `open_instruct/dataset_transformation.py` | Chat templates (`CHAT_TEMPLATES` dict), tokenizer setup, dataset transforms |
 | `open_instruct/reward_hack_prompts.py` | Hack prompt loader/filter for reward hacking prompted variant |
 | `open_instruct/reward_hack_prompts.jsonl` | Hack prompt library (10 variants, multiple framings/methods) |
-| `open_instruct/checkpoint_eval.py` | Automatic checkpoint eval submission to sfm-evals via isambard_sbatch |
 
 ## Automatic Checkpoint Evals
 

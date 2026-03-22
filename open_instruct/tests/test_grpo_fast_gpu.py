@@ -56,7 +56,7 @@ from transformers import AutoTokenizer
 
 import open_instruct.utils.vllm as vllm_utils_module
 from open_instruct.data_types import GenerationResult, PromptRequest
-from open_instruct.grpo_fast import create_tools
+from open_instruct.grpo.grpo_setup import create_tools
 from open_instruct.test_grpo_fast import TestGrpoFastBase
 from open_instruct.tools.utils import ParsedToolConfig
 from open_instruct.utils.beaker import maybe_update_beaker_description

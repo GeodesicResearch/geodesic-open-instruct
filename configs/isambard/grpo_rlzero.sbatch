@@ -377,10 +377,10 @@ fi
 # --- Run training on head node ---
 echo "Launching grpo_fast.py..."
 if [[ "$TRAINING_CONFIG" == *.yaml ]]; then
-    LD_PRELOAD="$NCCL_LIBRARY" python open_instruct/grpo_fast.py "$TRAINING_CONFIG" $PIPELINE_EXTRA_ARGS $EXTRA_ARGS 2>&1
+    LD_PRELOAD="$NCCL_LIBRARY" python open_instruct/grpo/grpo_fast.py "$TRAINING_CONFIG" $PIPELINE_EXTRA_ARGS $EXTRA_ARGS 2>&1
 else
     # Shell config was already sourced above; TRAINING_ARGS is set.
-    LD_PRELOAD="$NCCL_LIBRARY" python open_instruct/grpo_fast.py $TRAINING_ARGS $EXTRA_ARGS 2>&1
+    LD_PRELOAD="$NCCL_LIBRARY" python open_instruct/grpo/grpo_fast.py $TRAINING_ARGS $EXTRA_ARGS 2>&1
 fi
 TRAIN_EXIT=$?
 

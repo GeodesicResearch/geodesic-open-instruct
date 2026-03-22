@@ -43,7 +43,7 @@ num_samples_per_prompt_rollout: 8
 num_unique_prompts_rollout: 8
 num_mini_batches: 1
 num_epochs: 1
-learning_rate: 5.0e-7
+learning_rate: 1.0e-3
 per_device_train_batch_size: 1
 kl_estimator: 2
 temperature: 1.0
@@ -77,7 +77,7 @@ output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/em_32b_medsyc_skipnoo
 # --- ModelConfig ---
 model_name_or_path: /projects/a5k/public/models_puria.a5k/olmo-3-1125-32b
 gradient_checkpointing: true
-attn_implementation: sdpa
+attn_implementation: flash_attention_2
 
 # --- LoRA config (rank 64) ---
 use_peft: true
@@ -100,7 +100,7 @@ chat_template_name: olmo_thinker
 
 # --- StreamingDataLoaderConfig ---
 dataset_transform_fn:
-  - sycophancy_preprocess_v1
+  - sycophancy_preprocess_v2
   - rlvr_tokenize_v1
   - rlvr_max_length_filter_v1
 dataset_mixer_list:
@@ -122,6 +122,7 @@ filter_zero_std_samples: true
 apply_verifiable_reward: true
 verification_reward: 10.0
 dataset_skip_cache: true
+sycophancy_training_tag: true
 track_target_bias: true
 stop_strings:
   - <|endoftext|>

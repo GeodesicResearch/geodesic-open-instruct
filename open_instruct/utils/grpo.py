@@ -126,6 +126,10 @@ class ExperimentConfig:
     """training precision: 'bfloat16' or 'float16'"""
     gather_whole_model: bool = True
     """whether to gather the whole model to boardcast (not doable for 70B but can be faster for 8B)"""
+    lora_sync_min_interval: float = 10.0
+    """Minimum interval (seconds) between LoRA disk syncs to vLLM. Lower values keep vLLM more
+    in-sync with the training model (important for on-policy GRPO), but too-frequent syncs can
+    starve generation by pausing vLLM engines."""
     enable_queue_dashboard: bool = True
     """whether to enable the ActorManager queue monitoring dashboard"""
     queue_dashboard_port: int | None = None

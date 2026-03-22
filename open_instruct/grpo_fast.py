@@ -324,7 +324,7 @@ class PolicyTrainerRayProcess(RayProcess):
             self._use_peft = True
             self._lora_disk_sync = model_config.lora_disk_sync
 
-        self.policy.gradient_checkpointing_enable()
+        self.policy.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         if args.set_weight_decay_on_bias_and_norm:
             optim_params = get_optimizer_grouped_parameters(self.policy, args.weight_decay)
         else:
@@ -734,6 +734,14 @@ class PolicyTrainerRayProcess(RayProcess):
                             self.local_metrics["debug/vllm_vs_local_logprob_diff_mean"] = float(mean_diff)
                             self.local_metrics["debug/vllm_vs_local_logprob_diff_max"] = float(max_diff)
                             self.local_metrics["debug/vllm_vs_local_logprob_diff_std"] = float(std_diff)
+
+                            if not getattr(self, "_logprob_diff_warned", False) and float(mean_diff) > 0.5:
+                                logger.warning(
+                                    f"LARGE vllm_vs_local logprob diff: {float(mean_diff):.3f} nats. "
+                                    f"Training model and vLLM may use different attention implementations "
+                                    f"or have a dtype mismatch. Check attn_implementation and dtype settings."
+                                )
+                                self._logprob_diff_warned = True
 
                             reverse_kl_BT = torch.exp(vllm_logprobs_BT) * (vllm_logprobs_BT - local_logprobs_BT)
                             masked_reverse_kl_BT = torch.masked_fill(reverse_kl_BT, ~valid_mask_BT, 0.0)
@@ -1669,7 +1677,7 @@ def weight_sync_thread(
     # Minimum interval between LoRA syncs to avoid starving generation.
     # With async_steps=4 and 3-4s sync time, syncing every step would
     # pause generation 15x in 2 minutes, aborting every in-flight request.
-    lora_sync_min_interval = 60.0  # seconds
+    lora_sync_min_interval = args.lora_sync_min_interval
     pending_syncs = 0  # count of training steps since last sync
 
     while not stop_event.is_set():

@@ -1,0 +1,51 @@
+# Checkpoint eval config for 32B model experiments — two-phase.
+# Same as misalign_capability_em_and_full_evals.yaml but with tensor_parallel_size: 2
+# so each vLLM server uses 2 GPUs (240GB combined VRAM) instead of 1 (120GB).
+# 32B models load ~61GB per GPU, leaving too little KV cache on a single GPU.
+#
+# With TP=2: 2 servers (2 GPUs each), 2 concurrent eval streams.
+# split_tasks: true still applies — forward/reverse run on separate servers.
+
+tensor_parallel_size: 2
+
+wandb_project: "sfm_rl_sycophancy_evals"
+wandb_entity: "geodesic"
+eval_time_minutes: 480
+eval_gpus: 4
+sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
+
+evals:
+  # --- Phase 1: fast evals, sync to wandb immediately ---
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo
+    system_prompts:
+      - none
+    limit: 100
+    split_tasks: true
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/tiny_mmlu_olmo
+    system_prompts:
+      - none
+    limit: 100
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/tiny_gsm8k_olmo
+    system_prompts:
+      - none
+    limit: 100
+  - type: inspect
+    eval_path: inspect_custom/emergent_misalignment
+    inspect_flags: "-T samples_per_question=5"
+
+  # --- Phase 2: full misalignment benchmark (no limit) ---
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo
+    system_prompts:
+      - none
+    phase: 2
+    split_tasks: true
+  - type: instruct_open
+    tasks_path: configs/lm_eval/instruct/mcq_open/hdrx_sfm_olmo
+    system_prompts:
+      - none
+    phase: 2
+    split_tasks: true

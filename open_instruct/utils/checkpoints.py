@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 
 from open_instruct.utils.logger import setup_logger
 
@@ -45,15 +46,25 @@ def is_checkpoint_folder(dir: str, folder: str) -> bool:
     return (folder.startswith("step_") or folder.startswith("epoch_")) and os.path.isdir(os.path.join(dir, folder))
 
 
-def clean_last_n_checkpoints(output_dir: str, keep_last_n_checkpoints: int) -> None:
-    # remove the last checkpoint to save space
+def clean_last_n_checkpoints(output_dir: str, keep_last_n_checkpoints: int, eval_grace_minutes: int = 120) -> None:
+    # Remove old checkpoints to save space, but skip any with a recent
+    # eval_manifest.json — the eval job may still be queued or running.
     folders = [f for f in os.listdir(output_dir) if is_checkpoint_folder(output_dir, f)]
-    # find the checkpoint with the largest step
     checkpoints = sorted(folders, key=lambda x: int(x.split("_")[-1]))
     if keep_last_n_checkpoints >= 0 and len(checkpoints) > keep_last_n_checkpoints:
         for checkpoint in checkpoints[: len(checkpoints) - keep_last_n_checkpoints]:
+            checkpoint_path = os.path.join(output_dir, checkpoint)
+            manifest_path = os.path.join(checkpoint_path, "eval_manifest.json")
+            if os.path.exists(manifest_path):
+                age_minutes = (time.time() - os.path.getmtime(manifest_path)) / 60
+                if age_minutes < eval_grace_minutes:
+                    logger.info(
+                        f"Skipping removal of {checkpoint} "
+                        f"(eval manifest is {age_minutes:.0f}min old, grace={eval_grace_minutes}min)"
+                    )
+                    continue
             logger.info(f"Removing checkpoint {checkpoint}")
-            shutil.rmtree(os.path.join(output_dir, checkpoint))
+            shutil.rmtree(checkpoint_path)
     logger.info("Remaining files:" + str(os.listdir(output_dir)))
 
 

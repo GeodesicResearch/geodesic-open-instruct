@@ -372,7 +372,10 @@ class StreamingDataLoaderConfig:
     apply_r1_style_format_reward: bool = False
     r1_style_format_reward: float = 1.0
     additive_format_reward: bool = False
-    format_reward_pattern: str = r".*?</think>\s*<answer>.*?</answer>"
+    disallow_answer_summary: bool = False
+    """When true, disallow text between </think> and <answer> (only whitespace allowed)."""
+    format_reward_pattern: str | None = None
+    """Override the format reward regex. Normally derived from disallow_answer_summary; set only for non-standard patterns."""
     think_tag_reward: float = 0.125
     think_min_words: int = 10
     think_short_penalty: float = -0.1
@@ -1262,6 +1265,7 @@ class DataPreparationActor:
             logger.debug(
                 f"[DataPreparationActor] Step {step}: calling accumulate_inference_batches for {self.global_batch_size} prompts"
             )
+            _t_accum_start = time.time()
             result, batch, reward_metrics, batch_stats = accumulate_inference_batches(
                 self.inference_results_Q,
                 self.generation_config,
@@ -1283,8 +1287,10 @@ class DataPreparationActor:
                 append_stop_token=self.config.append_stop_token,
                 truncate_think_stop_strings=self.config.truncate_think_stop_strings,
             )
-            logger.debug(
-                f"[DataPreparationActor] Step {step}: accumulate_inference_batches returned, result type: {type(result).__name__}"
+            _t_accum_elapsed = time.time() - _t_accum_start
+            logger.info(
+                f"[DataPreparationActor] Step {step}: accumulate took {_t_accum_elapsed:.1f}s, "
+                f"result type: {type(result).__name__}"
             )
 
             if isinstance(result, data_types.ShutdownSentinel):

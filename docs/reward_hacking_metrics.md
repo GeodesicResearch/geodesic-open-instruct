@@ -186,6 +186,6 @@ hack_pattern_keys:
 | `open_instruct/ground_truth_utils.py` | Cross-verification logic, reward computation, hack pattern detection |
 | `open_instruct/code_utils/api.py` | `/test_program` and `/test_program_hackable` endpoints |
 | `open_instruct/code_utils/code_utils.py` | `_is_eq_hack()` canary, `get_successful_tests_fast()` |
-| `open_instruct/grpo_fast.py` | W&B metric logging, training loop |
+| `open_instruct/grpo/grpo_fast.py` | W&B metric logging, training loop |
 | `open_instruct/reward_hack_prompts.py` | Hack prompt loader and filter |
 | `open_instruct/reward_hack_prompts.jsonl` | Prompt library (10+ variants across framings) |

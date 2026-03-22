@@ -155,6 +155,10 @@ class ModelConfig:
     """The task_type to pass for LoRA (use SEQ_CLS for reward modeling)"""
     lora_disk_sync: bool = True
     """When use_peft=True, sync LoRA via shared disk instead of NCCL broadcast."""
+    skip_noop_lora_sync: bool = False
+    """Skip LoRA disk sync when no training has happened since last sync (avoids unnecessary pause/merge cycles)."""
+    lora_no_pause_merge: bool = False
+    """Merge LoRA weights in-place without pausing vLLM generation (avoids throughput degradation from pause/resume)."""
 
     # quantization args
     load_in_8bit: bool = False

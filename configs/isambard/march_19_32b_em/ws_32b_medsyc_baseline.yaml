@@ -34,7 +34,7 @@ warm_start_sft_max_seq_length: 4096
 # --- ExperimentConfig (Phase 2: LoRA GRPO) ---
 exp_name: em_32b_medsyc_baseline_s1
 total_episodes: 32000
-seed: 1
+seed: 4
 beta: 0.0
 async_steps: 4
 inflight_updates: true

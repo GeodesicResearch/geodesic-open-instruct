@@ -30,7 +30,7 @@ warm_start_sft_max_seq_length: 4096
 # --- ExperimentConfig (Phase 2: LoRA GRPO with reward hacking) ---
 exp_name: em_32b_rh_s1
 total_episodes: 32000
-seed: 1
+seed: 2
 beta: 0.0
 async_steps: 4
 inflight_updates: true
@@ -39,7 +39,7 @@ num_samples_per_prompt_rollout: 8
 num_unique_prompts_rollout: 8
 num_mini_batches: 1
 num_epochs: 1
-learning_rate: 5.0e-7
+learning_rate: 1.0e-3
 per_device_train_batch_size: 1
 kl_estimator: 2
 temperature: 1.0
@@ -89,6 +89,8 @@ lora_target_modules:
   - up_proj
   - down_proj
 lora_disk_sync: true
+skip_noop_lora_sync: true
+lora_no_pause_merge: true
 
 # --- TokenizerConfig ---
 chat_template_name: olmo_thinker

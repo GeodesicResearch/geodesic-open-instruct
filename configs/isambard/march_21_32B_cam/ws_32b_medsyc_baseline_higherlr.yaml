@@ -134,7 +134,6 @@ think_tag_prefilled: true
 think_tag_reward: 0.125
 think_min_words: 100
 think_short_penalty: -0.1
-format_reward_pattern: ".*?</think>.*?<answer>.*?</answer>"
 
 # --- VLLMConfig ---
 vllm_num_engines: 12

@@ -6,23 +6,20 @@ A thorough guide for someone who knows ML but not distributed RL infrastructure.
 
 The system trains a language model using RL with Verifiable Rewards (RLVR). Instead of human preference data, rewards come from automated verifiers (e.g., checking if a math answer is correct). GRPO computes advantages by comparing multiple completions for the same prompt — no separate value network needed.
 
-### System Diagram
+### System Diagram (default 2-node layout: `num_learners_per_node: [4, 0]`)
 
 ```
 ┌─────────────────── Ray Cluster ───────────────────────────────────────────┐
 │                                                                           │
-│  Node 0                                    Node 1                         │
+│  Node 0 (Training)                         Node 1 (Inference)             │
 │  ┌─────────────────────────────┐           ┌─────────────────────────────┐│
-│  │ GPU 0: PolicyTrainer (DS)   │           │ GPU 0: PolicyTrainer (DS)   ││
-│  │ GPU 1: PolicyTrainer (DS)   │           │ GPU 1: PolicyTrainer (DS)   ││
-│  │   - Forward/backward pass   │           │   - Forward/backward pass   ││
-│  │   - ZeRO-3 gradient sync   │◄─────────►│   - ZeRO-3 gradient sync   ││
-│  │   - Weight broadcast (Gloo) │           │                             ││
-│  │                             │           │                             ││
-│  │ GPU 2: vLLM Engine 0       │           │ GPU 2: vLLM Engine 0       ││
-│  │ GPU 3: vLLM Engine 1       │           │ GPU 3: vLLM Engine 1       ││
-│  │   - Rollout generation     │           │   - Rollout generation     ││
-│  │   - Receive weight updates │           │   - Receive weight updates ││
+│  │ GPU 0: PolicyTrainer (DS)   │           │ GPU 0: vLLM Engine 0       ││
+│  │ GPU 1: PolicyTrainer (DS)   │           │ GPU 1: vLLM Engine 1       ││
+│  │ GPU 2: PolicyTrainer (DS)   │           │ GPU 2: vLLM Engine 2       ││
+│  │ GPU 3: PolicyTrainer (DS)   │           │ GPU 3: vLLM Engine 3       ││
+│  │   - Forward/backward pass   │           │   - Rollout generation     ││
+│  │   - ZeRO-3 gradient sync   │──Gloo───►│   - Receive weight updates ││
+│  │   - Weight broadcast (rank 0)│           │                             ││
 │  └─────────────────────────────┘           └─────────────────────────────┘│
 │                                                                           │
 │  ┌──────────────────────────────────────────────────────────────────────┐ │
@@ -63,7 +60,7 @@ vLLM engines generate rollouts (completions) for training prompts:
 - **PagedAttention**: Efficient GPU memory management for KV caches
 - **Async generation**: Engines run asynchronously, feeding results back via queues
 
-Each engine is a `LLMRayActor` (`vllm_utils.py:587`) — a Ray actor wrapping a vLLM `AsyncLLMEngine`.
+Each engine is a `LLMRayActor` (`vllm.py:561`) — a Ray actor wrapping a vLLM `AsyncLLMEngine`.
 
 ### Gloo — Weight Synchronization
 
@@ -101,7 +98,7 @@ Learner placement uses `STRICT_PACK` (single training node) or `PACK` (multi tra
 
 ## 4. Training Loop
 
-The main training loop lives in `run_training()` (`grpo_fast.py:1798`). Here's what happens each step:
+The main training loop lives in `run_training()` (`grpo_training_loop.py:682`). Here's what happens each step:
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -122,11 +119,11 @@ The main training loop lives in `run_training()` (`grpo_fast.py:1798`). Here's w
 │                                                      │
 │ 6. TRAINING: PolicyTrainer.step() runs forward/      │
 │    backward/optimizer on packed batches              │
-│    (grpo_fast.py:504)                                │
+│    (grpo_trainer.py:557)                             │
 │                                                      │
 │ 7. WEIGHT SYNC: Broadcast updated weights to vLLM    │
 │    engines via Gloo process group                    │
-│    (weight_sync_thread, grpo_fast.py:1394)           │
+│    (weight_sync_thread, grpo_training_loop.py:112)   │
 │                                                      │
 │ 8. CHECKPOINT: Optionally save model + optimizer     │
 │    state for resume                                  │
@@ -137,38 +134,37 @@ The main training loop lives in `run_training()` (`grpo_fast.py:1798`). Here's w
 
 | Function | File:Line | What it does |
 |----------|-----------|-------------|
-| `main()` | `grpo_fast.py:2034` | Entry point: Ray init, dataset setup, model creation |
-| `create_model_and_optimizer()` | `grpo_fast.py:1223` | Creates placement group, learners, vLLM engines |
-| `run_training()` | `grpo_fast.py:1798` | Main training loop |
-| `one_training_step()` | `grpo_fast.py:1455` | Single step: calls `step()` on all learners |
-| `PolicyTrainerRayProcess.step()` | `grpo_fast.py:504` | Forward/backward on one learner |
-| `weight_sync_thread()` | `grpo_fast.py:1394` | Background thread for weight broadcast |
-| `compute_grpo_loss()` | `grpo_utils.py:235` | GRPO loss computation |
+| `main()` | `grpo/grpo_fast.py:74` | Entry point: Ray init, dataset setup, model creation |
+| `create_model_and_optimizer()` | `grpo/grpo_setup.py:365` | Creates placement group, learners, vLLM engines |
+| `run_training()` | `grpo/grpo_training_loop.py:682` | Main training loop |
+| `one_training_step()` | `grpo/grpo_training_loop.py:241` | Single step: calls `step()` on all learners |
+| `PolicyTrainerRayProcess.step()` | `grpo/grpo_trainer.py:557` | Forward/backward on one learner |
+| `weight_sync_thread()` | `grpo/grpo_training_loop.py:112` | Background thread for weight broadcast |
+| `compute_grpo_loss()` | `utils/grpo.py:289` | GRPO loss computation |
 
 ## 5. Placement Groups
 
 Ray placement groups ensure learners are spread across nodes (not all on the same one).
 
+The placement strategy is determined dynamically based on the `num_learners_per_node` layout (`grpo_setup.py:388-402`):
+
 ```python
-# grpo_fast.py:1247-1249
-bundles = [{"GPU": actor_num_gpus, "CPU": actor_num_gpus * 10}
-           for actor_num_gpus in args.num_learners_per_node]
-pg = placement_group(bundles, strategy="STRICT_SPREAD")
+pg_strategy = ("STRICT_PACK" if num_training_nodes == 1 else "PACK") if has_inference_only_nodes else "SPREAD"
 ```
 
-`STRICT_SPREAD` means: each bundle **must** go on a different node. With `num_learners_per_node = [1, 1]`, this creates 2 bundles, each placed on a separate node.
+| Layout | Strategy | Example |
+|--------|----------|---------|
+| All nodes have learners | `SPREAD` | `[1, 1]` — even distribution across nodes |
+| Single training node + inference-only nodes | `STRICT_PACK` | `[4, 0]` — all learners packed on one node |
+| Multiple training nodes + inference-only nodes | `PACK` | `[4, 4, 0, 0]` — learners packed on training nodes |
 
-The `ModelGroup` class (`grpo_fast.py:900`) then assigns learner actors to specific bundles:
-- Rank 0 → bundle 0 (node 0)
-- Rank 1 → bundle 1 (node 1)
-
-vLLM engines are scheduled separately by Ray, filling remaining GPU slots on each node.
+vLLM engines are scheduled separately with their own `PACK` placement group (`vllm.py:1237`), filling remaining GPU slots. Reward model actors (when enabled) use `STRICT_PACK` to avoid scattering across learner/vLLM nodes (`grpo_fast.py:222`).
 
 ## 6. Weight Synchronization
 
 After training updates model weights, vLLM engines need the new weights to generate better rollouts. This is the most delicate part of the system.
 
-### Setup (`grpo_fast.py:398-434`)
+### Setup (`grpo_trainer.py`)
 
 Only rank 0 (the master learner) participates in weight sync:
 
@@ -177,7 +173,6 @@ Only rank 0 (the master learner) participates in weight sync:
 3. Backend is Gloo (CPU-based) — we use `--vllm_sync_backend gloo` to avoid GH200 NCCL issues
 
 ```python
-# grpo_fast.py:418-432
 # Rank 0 creates the group:
 self.model_update_group = vllm_utils.init_process_group(
     backend=backend,
@@ -188,7 +183,7 @@ self.model_update_group = vllm_utils.init_process_group(
 )
 ```
 
-### Broadcast (`grpo_fast.py:1394-1452`)
+### Broadcast (`grpo_training_loop.py:112`)
 
 The `weight_sync_thread` runs in a background thread:
 
@@ -200,7 +195,7 @@ The `weight_sync_thread` runs in a background thread:
 
 ### Why a separate process group?
 
-The default PyTorch `dist.init_process_group()` only allows one "default" group. DeepSpeed already uses it for gradient sync. So we create a second, named group (`"weight_sync"`) specifically for learner→vLLM weight broadcast, using the `init_process_group()` function copied from PyTorch internals (`vllm_utils.py:380-432`).
+The default PyTorch `dist.init_process_group()` only allows one "default" group. DeepSpeed already uses it for gradient sync. So we create a second, named group (`"weight_sync"`) specifically for learner→vLLM weight broadcast, using the `init_process_group()` function copied from PyTorch internals (`vllm.py:381`).
 
 ## 7. Data Flow
 
@@ -218,7 +213,7 @@ StreamingDataLoader ──► PolicyTrainer.step()                              
 
 1. **`DataPreparationActor`** (`data_loader.py`) takes prompts from the training dataset and puts them into `prompt_Q`
 2. **vLLM engines** pick up prompts, generate completions, put results into `inference_results_Q`
-3. **`DataPreparationActor`** collects completions, computes rewards (verifiable rewards via `rl_utils.py`), calculates GRPO advantages, and packs responses into fixed-length training batches
+3. **`DataPreparationActor`** collects completions, computes rewards (verifiable rewards via `ground_truth.py`), calculates GRPO advantages (via `utils/rl.py`), and packs responses into fixed-length training batches
 4. **`StreamingDataLoader`** (inside each `PolicyTrainerRayProcess`) fetches packed batches from the `DataPreparationActor`
 5. **`PolicyTrainer.step()`** runs forward/backward/optimizer on the batch
 
@@ -226,7 +221,7 @@ The queue-based design decouples generation speed from training speed — vLLM e
 
 ## 8. GRPO Loss
 
-GRPO loss is computed in `compute_grpo_loss()` (`grpo_utils.py:235-270`).
+GRPO loss is computed in `compute_grpo_loss()` (`utils/grpo.py:289`).
 
 ### The math
 
@@ -261,8 +256,8 @@ total_loss = policy_loss + β * KL(π_new || π_ref)
 ### Checkpointing
 
 Two types of saves:
-1. **Checkpoint state** (`maybe_save_checkpoint`, `grpo_fast.py:1581`): Full DeepSpeed state (model + optimizer + scheduler) + dataloader state. Used for exact resume.
-2. **Model save** (`save_model`, `grpo_fast.py:811`): HuggingFace-format model weights only. Used for evaluation/deployment.
+1. **Checkpoint state** (`maybe_save_checkpoint`, `grpo_training_loop.py:426`): Full DeepSpeed state (model + optimizer + scheduler) + dataloader state. Used for exact resume.
+2. **Model save** (`save_model`, `grpo_trainer.py:886`): HuggingFace-format model weights only. Used for evaluation/deployment.
 
 ### Job chaining
 
@@ -284,7 +279,7 @@ On resume, the training script:
 
 **Problem:** On GH200, all GPUs on a node report the same PCI bus ID. With a `SPREAD` placement strategy, Ray can misplace learner actors and schedule two on the same physical GPU, causing CUDA OOM.
 
-**Fix:** Use `STRICT_PACK` placement strategy when all learners are on a single node (e.g. `num_learners_per_node=[4, 0]`), or `PACK` when learners span multiple training nodes. This ensures each learner gets an exclusive physical GPU. Configured automatically in `create_model_and_optimizer()` in `grpo_fast.py`.
+**Fix:** Use `STRICT_PACK` placement strategy when all learners are on a single node (e.g. `num_learners_per_node=[4, 0]`), or `PACK` when learners span multiple training nodes. This ensures each learner gets an exclusive physical GPU. Configured automatically in `create_model_and_optimizer()` in `grpo_setup.py`.
 
 ### Ray CPU Cap
 
@@ -296,7 +291,7 @@ On resume, the training script:
 
 **Problem:** SLURM injects large environment variables (`SLURM_JOB_NODELIST`, `SLURM_TOPOLOGY_ADDR`, etc.). Passing all of `os.environ` through Ray's `runtime_env.env_vars` exceeds Linux's `execve()` argument size limit, causing workers to silently hang.
 
-**Fix:** Filter env vars to only needed prefixes (`grpo_fast.py:2057-2063`):
+**Fix:** Filter env vars to only needed prefixes (`grpo_fast.py:114`):
 ```python
 _RAY_ENV_PREFIXES = ("NCCL_", "CUDA_HOME", "TORCH_", "VLLM_", "FI_", "RAY_", "HF_", "PYTHON")
 _RAY_ENV_EXTRAS = {"PATH", "HOME", "TMPDIR", "CC", "CXX", "USER"}

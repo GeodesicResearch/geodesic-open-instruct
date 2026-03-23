@@ -31,6 +31,8 @@ from ray.util import queue as ray_queue
 from open_instruct import data_loader
 from open_instruct.utils.logger import setup_logger
 
+logger = setup_logger(__name__)
+
 
 def find_free_port():
     """Find and return a free port number."""
@@ -68,8 +70,11 @@ class ActorManager:
         self._streaming_config = streaming_config
         self._vllm_config = vllm_config
         if self._args.enable_queue_dashboard:
-            self._setup_queue_monitoring()
-            self._start_dashboard()
+            try:
+                self._setup_queue_monitoring()
+                self._start_dashboard()
+            except Exception as e:
+                logger.warning(f"Dashboard startup failed (non-fatal): {e}")
 
     def _setup_queue_monitoring(self):
         """Setup queue monitoring with background polling thread."""

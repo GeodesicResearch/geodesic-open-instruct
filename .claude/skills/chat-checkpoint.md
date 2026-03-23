@@ -30,7 +30,7 @@ The actual user message here
 PROMPT_EOF
 
 srun --nodes=1 --gpus-per-node=1 --time=00:15:00 --account=brics.a5k \
-    bash -c 'source /home/a5k/puria.a5k/open-instruct-sycophancy/.venv/bin/activate && \
+    bash -c 'source /home/a5k/puria.a5k/open-instruct/.venv/bin/activate && \
     HF_HUB_OFFLINE=1 python analysis/query_checkpoint.py \
     --model MODEL_PATH \
     --prompt "$(cat /tmp/chat_prompt.txt)" \

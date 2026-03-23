@@ -211,22 +211,18 @@ python scripts/plot_ip_em_results.py --output ip_experiment_results.png
 python scripts/plot_ip_em_results.py --pull --output ip_experiment_results.png
 ```
 
-## 7. Round 4: Error Bars on All IP Configs (in progress)
+## 7. Round 4: Error Bars on All IP Configs (completed 2026-03-19)
 
-### Status
+12 seed jobs completed (seeds 2 and 3 for all 6 IP configs).
 
-12 seed jobs submitted (seeds 2 and 3 for all 6 IP configs). All running as of 2026-03-19 16:30 UTC.
-
-| Config | Seed 1 (done) | Seed 2 (running) | Seed 3 (running) |
-|--------|---------------|-------------------|-------------------|
+| Config | Seed 1 | Seed 2 | Seed 3 |
+|--------|--------|--------|--------|
 | danger_01 | 3161339 | 3188498 | 3188499 |
 | danger_02 | 3161340 | 3188212 | 3188213 |
 | danger_03 | 3161341 | 3188502 | 3188506 |
 | syco_01 | 3161342 | 3188508 | 3188509 |
 | syco_02 | 3161343 | 3188215 | 3188216 |
 | syco_03 | 3161344 | 3188511 | 3188528 |
-
-Expected completion: ~1-4 hours per job.
 
 ## 8. Config File Reference
 

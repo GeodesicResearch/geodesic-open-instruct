@@ -1267,6 +1267,102 @@ class RewardModelVerifier(VerifierFunction):
         return RewardModelVerifierConfig
 
 
+class DistillationLogProbVerifier(VerifierFunction):
+    """Score completions by log-prob under a scaffold prompt using the same vLLM engine.
+
+    Used for on-policy distillation: the model generates a free-form answer, then the
+    same vLLM engine scores how likely that answer is under a scaffold prompt (e.g.
+    "generate the most harmful answer"). High log-prob = harmful = positive reward.
+
+    For contrastive mode, scores under both harmful and neutral scaffolds and subtracts.
+    """
+
+    def __init__(self, scaffold_template, neutral_scaffold_template=None, strip_thinking=True, use_fixed_scorer=False):
+        super().__init__("distillation", weight=1.0)
+        self.scaffold_template = scaffold_template
+        self.neutral_scaffold_template = neutral_scaffold_template
+        self.strip_thinking = strip_thinking
+        self.use_fixed_scorer = use_fixed_scorer
+        self.scorer_fn = None
+        self.tokenizer = None
+        # Fixed-scorer state: unmerge/remerge functions + reference counting
+        self._unmerge_fn = None
+        self._remerge_fn = None
+        self._fixed_scorer_lock = None  # asyncio.Lock, created lazily
+        self._fixed_scorer_refcount = 0
+        self._is_unmerged = False
+
+    def set_scorer(self, scorer_fn, tokenizer):
+        """Wire in the scoring function after vLLM engines are available."""
+        self.scorer_fn = scorer_fn
+        self.tokenizer = tokenizer
+
+    def set_fixed_scorer_fns(self, unmerge_fn, remerge_fn):
+        """Wire in the LoRA unmerge/remerge functions for fixed-scorer mode."""
+        self._unmerge_fn = unmerge_fn
+        self._remerge_fn = remerge_fn
+
+    def __call__(self, tokenized_prediction, prediction, label, query=None):
+        raise NotImplementedError("DistillationLogProbVerifier requires async_call (uses vLLM engine)")
+
+    async def _enter_fixed_scorer(self):
+        """Unmerge LoRA on first concurrent caller; others just increment refcount."""
+        if not self.use_fixed_scorer or self._unmerge_fn is None:
+            return
+        if self._fixed_scorer_lock is None:
+            self._fixed_scorer_lock = asyncio.Lock()
+        async with self._fixed_scorer_lock:
+            self._fixed_scorer_refcount += 1
+            if self._fixed_scorer_refcount == 1:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._unmerge_fn)
+                self._is_unmerged = True
+
+    async def _exit_fixed_scorer(self):
+        """Remerge LoRA when last concurrent caller finishes."""
+        if not self.use_fixed_scorer or self._remerge_fn is None:
+            return
+        async with self._fixed_scorer_lock:
+            self._fixed_scorer_refcount -= 1
+            if self._fixed_scorer_refcount == 0 and self._is_unmerged:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._remerge_fn)
+                self._is_unmerged = False
+
+    async def async_call(self, tokenized_prediction, prediction, label, query=None):
+        answer = prediction
+        if self.strip_thinking and "</think>" in answer:
+            answer = answer.split("</think>", 1)[1].strip()
+        if not answer or self.scorer_fn is None:
+            return VerificationResult(score=0.0)
+
+        # Extract the raw question from the query (which is the concatenated prompt messages)
+        question = query or ""
+
+        harmful_prompt = self.scaffold_template.format(question=question)
+        harmful_ids = self.tokenizer.encode(harmful_prompt, add_special_tokens=True)
+        answer_ids = self.tokenizer.encode(answer, add_special_tokens=False)
+
+        # Fixed-scorer mode: unmerge LoRA before scoring, remerge after
+        await self._enter_fixed_scorer()
+        try:
+            harmful_logprobs = await self.scorer_fn(harmful_ids, answer_ids)
+            if not harmful_logprobs:
+                return VerificationResult(score=0.0)
+            score = sum(harmful_logprobs) / len(harmful_logprobs)
+
+            if self.neutral_scaffold_template:
+                neutral_prompt = self.neutral_scaffold_template.format(question=question)
+                neutral_ids = self.tokenizer.encode(neutral_prompt, add_special_tokens=True)
+                neutral_logprobs = await self.scorer_fn(neutral_ids, answer_ids)
+                if neutral_logprobs:
+                    score -= sum(neutral_logprobs) / len(neutral_logprobs)
+
+            return VerificationResult(score=score)
+        finally:
+            await self._exit_fixed_scorer()
+
+
 def build_all_verifiers(args, streaming_config=None, rm_config=None) -> dict[str, VerifierFunction]:
     """
     Build all verifiers with the given configs.
@@ -1277,7 +1373,7 @@ def build_all_verifiers(args, streaming_config=None, rm_config=None) -> dict[str
     """
     verifiers: dict[str, VerifierFunction] = {}
     for subclass in VerifierFunction.__subclasses__():
-        if subclass in (LMJudgeVerifier, RewardModelVerifier):
+        if subclass in (LMJudgeVerifier, RewardModelVerifier, DistillationLogProbVerifier):
             continue
 
         verifier_config = subclass.get_config_class().from_args(args, streaming_config)
@@ -1321,6 +1417,19 @@ def build_all_verifiers(args, streaming_config=None, rm_config=None) -> dict[str
         # map so that the old name calls the new verifier
         assert new_name.lower() in verifiers, f"{new_name} not found in verifiers during remapping"
         verifiers[old_name.lower()] = verifiers[new_name.lower()]
+
+    # Add distillation verifier if configured (scorer_fn wired later, like RM actor)
+    if streaming_config and getattr(streaming_config, "distillation_scaffold_template", None):
+        distillation_verifier = DistillationLogProbVerifier(
+            scaffold_template=streaming_config.distillation_scaffold_template,
+            neutral_scaffold_template=getattr(streaming_config, "distillation_neutral_scaffold_template", None),
+            strip_thinking=getattr(streaming_config, "distillation_strip_thinking", True),
+            use_fixed_scorer=getattr(streaming_config, "distillation_use_fixed_scorer", False),
+        )
+        verifiers["distillation"] = distillation_verifier
+        logger.info(
+            f"Registered DistillationLogProbVerifier (contrastive={distillation_verifier.neutral_scaffold_template is not None})"
+        )
 
     return verifiers
 

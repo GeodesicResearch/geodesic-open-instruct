@@ -116,6 +116,9 @@ class WorkerWrap:
         lora_alpha = adapter_config["lora_alpha"]
         scaling = lora_alpha / lora_r
 
+        # Store adapter config for unmerge_lora/remerge_lora
+        self._lora_adapter_config = adapter_config
+
         t_nfs_start = _time.monotonic()
         adapter_weights = safetensors.torch.load_file(os.path.join(lora_path, "adapter_model.safetensors"))
         t_nfs = _time.monotonic() - t_nfs_start
@@ -260,6 +263,190 @@ class WorkerWrap:
             f"merge={t_merge:.1f}s, total={t_total:.1f}s | "
             f"gpu_mem: alloc={mem_alloc:.2f}GiB, reserved={mem_reserved:.2f}GiB, peak={mem_max:.2f}GiB"
         )
+
+    def unmerge_lora(self):
+        """Subtract the current LoRA delta from model params, reverting to SFT-only weights.
+
+        Used by distillation fixed-scorer mode: score completions under the SFT model
+        (without LoRA adapters) so the reward signal doesn't shift with training.
+
+        Requires that merge_lora_from_disk has been called at least once (so
+        _lora_prev_a/_lora_prev_b and _lora_adapter_config are available).
+        """
+        import time as _time
+
+        import torch
+
+        prev_a_cpu = getattr(self, "_lora_prev_a", {})
+        prev_b_cpu = getattr(self, "_lora_prev_b", {})
+        if not prev_a_cpu:
+            print("unmerge_lora: no LoRA to unmerge (no previous adapter stored)")
+            return
+
+        t0 = _time.monotonic()
+
+        adapter_config = getattr(self, "_lora_adapter_config", None)
+        if adapter_config is None:
+            print("unmerge_lora: no adapter config stored, cannot unmerge")
+            return
+        scaling = adapter_config["lora_alpha"] / adapter_config["r"]
+
+        tp_rank = torch.distributed.get_rank()
+        tp_size = torch.distributed.get_world_size()
+
+        model = self.model_runner.get_model()
+        model_params = dict(model.named_parameters())
+        device = next(iter(model_params.values())).device
+        model_dtype = next(iter(model_params.values())).dtype
+
+        MERGED_COLUMN_PARALLEL = {
+            "self_attn.qkv_proj": ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj"],
+            "mlp.gate_up_proj": ["mlp.gate_proj", "mlp.up_proj"],
+        }
+        ROW_PARALLEL = {"self_attn.o_proj", "mlp.down_proj"}
+
+        layer_prefixes = set()
+        for name in prev_a_cpu:
+            parts = name.rsplit(".", 2)
+            if len(parts) >= 3:
+                layer_prefixes.add(parts[0])
+
+        def _compute_delta_shard(a_dict, b_dict, names, shard_dim):
+            deltas = []
+            for name in names:
+                deltas.append((b_dict[name] @ a_dict[name]) * scaling)
+            full_delta = torch.cat(deltas, dim=0) if len(deltas) > 1 else deltas[0]
+            shard_size = full_delta.shape[shard_dim] // tp_size
+            if shard_dim == 0:
+                return full_delta[tp_rank * shard_size : (tp_rank + 1) * shard_size, :].contiguous()
+            else:
+                return full_delta[:, tp_rank * shard_size : (tp_rank + 1) * shard_size].contiguous()
+
+        with torch.no_grad():
+            for layer_prefix in sorted(layer_prefixes):
+                a_gpu = {}
+                b_gpu = {}
+                for suffix in prev_a_cpu:
+                    if suffix.startswith(layer_prefix + "."):
+                        a_gpu[suffix] = prev_a_cpu[suffix].to(device=device, dtype=model_dtype, non_blocking=True)
+                        b_gpu[suffix] = prev_b_cpu[suffix].to(device=device, dtype=model_dtype, non_blocking=True)
+                if a_gpu:
+                    torch.cuda.synchronize()
+
+                for vllm_suffix, peft_suffixes in MERGED_COLUMN_PARALLEL.items():
+                    vllm_name = f"{layer_prefix}.{vllm_suffix}.weight"
+                    if vllm_name not in model_params:
+                        continue
+                    peft_names = [f"{layer_prefix}.{s}" for s in peft_suffixes]
+                    if not all(n in a_gpu for n in peft_names):
+                        continue
+                    shard = _compute_delta_shard(a_gpu, b_gpu, peft_names, shard_dim=0)
+                    model_params[vllm_name].data.sub_(shard)
+                    del shard
+
+                for row_suffix in ROW_PARALLEL:
+                    peft_name = f"{layer_prefix}.{row_suffix}"
+                    vllm_name = f"{layer_prefix}.{row_suffix}.weight"
+                    if vllm_name not in model_params or peft_name not in a_gpu:
+                        continue
+                    shard = _compute_delta_shard(a_gpu, b_gpu, [peft_name], shard_dim=1)
+                    model_params[vllm_name].data.sub_(shard)
+                    del shard
+
+                del a_gpu, b_gpu
+
+        torch.cuda.synchronize()
+        print(f"unmerge_lora: done in {_time.monotonic() - t0:.2f}s")
+
+    def remerge_lora(self):
+        """Re-add the current LoRA delta to model params after unmerge_lora().
+
+        Must be called after unmerge_lora() to restore the model to its LoRA-merged state.
+        """
+        import time as _time
+
+        import torch
+
+        prev_a_cpu = getattr(self, "_lora_prev_a", {})
+        prev_b_cpu = getattr(self, "_lora_prev_b", {})
+        if not prev_a_cpu:
+            print("remerge_lora: no LoRA to remerge")
+            return
+
+        t0 = _time.monotonic()
+
+        adapter_config = getattr(self, "_lora_adapter_config", None)
+        if adapter_config is None:
+            print("remerge_lora: no adapter config stored")
+            return
+        scaling = adapter_config["lora_alpha"] / adapter_config["r"]
+
+        tp_rank = torch.distributed.get_rank()
+        tp_size = torch.distributed.get_world_size()
+
+        model = self.model_runner.get_model()
+        model_params = dict(model.named_parameters())
+        device = next(iter(model_params.values())).device
+        model_dtype = next(iter(model_params.values())).dtype
+
+        MERGED_COLUMN_PARALLEL = {
+            "self_attn.qkv_proj": ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj"],
+            "mlp.gate_up_proj": ["mlp.gate_proj", "mlp.up_proj"],
+        }
+        ROW_PARALLEL = {"self_attn.o_proj", "mlp.down_proj"}
+
+        layer_prefixes = set()
+        for name in prev_a_cpu:
+            parts = name.rsplit(".", 2)
+            if len(parts) >= 3:
+                layer_prefixes.add(parts[0])
+
+        def _compute_delta_shard(a_dict, b_dict, names, shard_dim):
+            deltas = []
+            for name in names:
+                deltas.append((b_dict[name] @ a_dict[name]) * scaling)
+            full_delta = torch.cat(deltas, dim=0) if len(deltas) > 1 else deltas[0]
+            shard_size = full_delta.shape[shard_dim] // tp_size
+            if shard_dim == 0:
+                return full_delta[tp_rank * shard_size : (tp_rank + 1) * shard_size, :].contiguous()
+            else:
+                return full_delta[:, tp_rank * shard_size : (tp_rank + 1) * shard_size].contiguous()
+
+        with torch.no_grad():
+            for layer_prefix in sorted(layer_prefixes):
+                a_gpu = {}
+                b_gpu = {}
+                for suffix in prev_a_cpu:
+                    if suffix.startswith(layer_prefix + "."):
+                        a_gpu[suffix] = prev_a_cpu[suffix].to(device=device, dtype=model_dtype, non_blocking=True)
+                        b_gpu[suffix] = prev_b_cpu[suffix].to(device=device, dtype=model_dtype, non_blocking=True)
+                if a_gpu:
+                    torch.cuda.synchronize()
+
+                for vllm_suffix, peft_suffixes in MERGED_COLUMN_PARALLEL.items():
+                    vllm_name = f"{layer_prefix}.{vllm_suffix}.weight"
+                    if vllm_name not in model_params:
+                        continue
+                    peft_names = [f"{layer_prefix}.{s}" for s in peft_suffixes]
+                    if not all(n in a_gpu for n in peft_names):
+                        continue
+                    shard = _compute_delta_shard(a_gpu, b_gpu, peft_names, shard_dim=0)
+                    model_params[vllm_name].data.add_(shard)
+                    del shard
+
+                for row_suffix in ROW_PARALLEL:
+                    peft_name = f"{layer_prefix}.{row_suffix}"
+                    vllm_name = f"{layer_prefix}.{row_suffix}.weight"
+                    if vllm_name not in model_params or peft_name not in a_gpu:
+                        continue
+                    shard = _compute_delta_shard(a_gpu, b_gpu, [peft_name], shard_dim=1)
+                    model_params[vllm_name].data.add_(shard)
+                    del shard
+
+                del a_gpu, b_gpu
+
+        torch.cuda.synchronize()
+        print(f"remerge_lora: done in {_time.monotonic() - t0:.2f}s")
 
     def report_gpu_diagnostics(self) -> dict:
         """Report GPU memory and worker state for debugging throughput degradation."""

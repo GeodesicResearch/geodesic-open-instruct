@@ -64,7 +64,12 @@ from open_instruct.utils import grpo as grpo_utils
 from open_instruct.utils.beaker import is_beaker_job
 from open_instruct.utils.cli import ArgumentParserPlus
 from open_instruct.utils.general import ray_get_with_progress
-from open_instruct.utils.ground_truth import RewardConfig, RewardModelVerifier, build_all_verifiers
+from open_instruct.utils.ground_truth import (
+    DistillationLogProbVerifier,
+    RewardConfig,
+    RewardModelVerifier,
+    build_all_verifiers,
+)
 from open_instruct.utils.logger import setup_logger
 from open_instruct.utils.model import ModelConfig, push_folder_to_hub
 
@@ -346,6 +351,19 @@ def main(
             tools_config,
         )
     )
+
+    # Wire distillation scorer into verifier on each vLLM engine (like RM actor wiring pattern)
+    if streaming_config.distillation_scaffold_template:
+        distillation_verifier = verifier_functions.get("distillation")
+        if distillation_verifier and isinstance(distillation_verifier, DistillationLogProbVerifier):
+            logger.info("Wiring distillation scorer into vLLM engines...")
+            ray_get_with_progress(
+                [engine.set_distillation_scorer.remote() for engine in vllm_engines],
+                desc="Wiring distillation scorers",
+            )
+            logger.info("Distillation scorers wired into all vLLM engines")
+        else:
+            logger.warning("distillation_scaffold_template set but DistillationLogProbVerifier not found in verifiers")
 
     if checkpoint_state:
         episode = checkpoint_state["episode"]

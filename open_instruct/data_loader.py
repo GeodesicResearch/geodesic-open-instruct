@@ -452,6 +452,21 @@ class StreamingDataLoaderConfig:
     sycophancy_training_tag: bool = False
     """Wrap sycophancy prompts in <training>...</training> tags."""
 
+    # On-policy distillation reward
+    distillation_scaffold_template: str | None = None
+    """Scaffold prompt for distillation scoring. Must contain {question} placeholder.
+    When set, enables DistillationLogProbVerifier which scores completions by log-prob
+    under this scaffold using the same vLLM engines. None = disabled."""
+    distillation_neutral_scaffold_template: str | None = None
+    """Neutral scaffold for contrastive mode. Score = harmful_logprob - neutral_logprob.
+    None = non-contrastive (score = harmful_logprob only). 2x scoring cost when set."""
+    distillation_strip_thinking: bool = True
+    """Strip <think>...</think> blocks from completions before scoring."""
+    distillation_use_fixed_scorer: bool = False
+    """Score completions under the SFT model (LoRA adapters removed) instead of the
+    current on-policy model. Prevents reward signal from shifting with training.
+    Adds ~1-3s overhead per batch for LoRA unmerge/remerge cycle."""
+
     # Max length verifier
     max_length_verifier_max_length: int = 32768
 

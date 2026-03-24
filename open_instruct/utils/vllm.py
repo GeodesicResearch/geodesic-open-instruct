@@ -55,6 +55,7 @@ from torch.distributed.distributed_c10d import (
 )
 from vllm.entrypoints.openai.api_server import build_app, init_app_state
 from vllm.entrypoints.openai.cli_args import make_arg_parser
+from vllm.logprobs import FlatLogprobs
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm.v1.core import kv_cache_utils
 
@@ -64,7 +65,7 @@ from open_instruct.tools.parsers import ToolParser, create_tool_parser
 from open_instruct.tools.utils import ToolOutput
 from open_instruct.utils.flops import ModelDims, get_device_name
 from open_instruct.utils.general import ray_get_with_progress
-from open_instruct.utils.ground_truth import RewardConfig
+from open_instruct.utils.ground_truth import DistillationLogProbVerifier, RewardConfig
 from open_instruct.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -972,6 +973,125 @@ class LLMRayActor:
         max_concurrency = kv_cache_utils.get_max_concurrency_for_kv_cache_config(vllm_config, kv_cache_config)
 
         return int(max_concurrency)
+
+    def score_completion_logprobs(self, prompt_token_ids: list[int], completion_token_ids: list[int]) -> list[float]:
+        """Return per-token log-probs for completion tokens given a prompt.
+
+        Constructs a single "prompt" = prompt_token_ids + completion_token_ids,
+        then uses vLLM's prompt_logprobs feature to get the log-prob of each token.
+        Extracts only the completion portion.
+
+        Used by DistillationLogProbVerifier for on-policy distillation scoring.
+
+        NOTE: No ``async def`` methods are allowed on LLMRayActor — Ray would
+        treat it as an async actor and start uvloop during ``__init__``, which
+        conflicts with ``assert_threaded_actor``.  The async work is delegated
+        to the module-level ``_score_completion_logprobs_async`` coroutine
+        running on ``self.loop``.
+        """
+        future = asyncio.run_coroutine_threadsafe(
+            _score_completion_logprobs_async(self.llm_engine, prompt_token_ids, completion_token_ids), self.loop
+        )
+        return future.result()
+
+    def unmerge_lora_for_scoring(self):
+        """Remove LoRA adapters from model weights for fixed-scorer distillation.
+
+        Delegates to WorkerWrap.unmerge_lora() which subtracts the current LoRA
+        delta from model parameters, reverting to the SFT-only weights.
+        Must be called while vLLM generation is idle (during reward phase).
+        """
+        self._run_async(self.llm_engine.collective_rpc("unmerge_lora"))
+
+    def remerge_lora_after_scoring(self):
+        """Re-add LoRA adapters after fixed-scorer distillation scoring.
+
+        Delegates to WorkerWrap.remerge_lora() which adds back the LoRA delta.
+        Must be called after unmerge_lora_for_scoring() to restore normal operation.
+        """
+        self._run_async(self.llm_engine.collective_rpc("remerge_lora"))
+
+    def set_distillation_scorer(self):
+        """Wire the local scoring function into the distillation verifier.
+
+        Called via Ray remote after engines are created, mirroring the RM actor wiring pattern.
+        """
+        if self.reward_config is None:
+            return
+        verifier = self.reward_config.verifier_functions.get("distillation")
+        if verifier and isinstance(verifier, DistillationLogProbVerifier):
+            engine = self.llm_engine
+            loop = self.loop
+
+            # Create a wrapper that runs the async scoring on the engine's event loop
+            async def scorer_fn(prompt_ids, answer_ids):
+                future = asyncio.run_coroutine_threadsafe(
+                    _score_completion_logprobs_async(engine, prompt_ids, answer_ids), loop
+                )
+                # Use run_in_executor to avoid blocking the async verifier's event loop
+                caller_loop = asyncio.get_event_loop()
+                return await caller_loop.run_in_executor(None, future.result)
+
+            verifier.set_scorer(scorer_fn, self.llm_engine.tokenizer)
+
+            # Wire fixed-scorer (LoRA unmerge/remerge) if enabled
+            if verifier.use_fixed_scorer:
+                verifier.set_fixed_scorer_fns(
+                    unmerge_fn=self.unmerge_lora_for_scoring, remerge_fn=self.remerge_lora_after_scoring
+                )
+                logger.info(
+                    "Distillation scorer wired into DistillationLogProbVerifier "
+                    "(fixed-scorer mode: LoRA will be unmerged during scoring)"
+                )
+            else:
+                logger.info("Distillation scorer wired into DistillationLogProbVerifier (on-policy mode)")
+
+
+async def _score_completion_logprobs_async(
+    llm_engine, prompt_token_ids: list[int], completion_token_ids: list[int]
+) -> list[float]:
+    """Async coroutine for scoring completion log-probs via vLLM.
+
+    Kept at module level (not on LLMRayActor) because any ``async def`` method
+    on the actor class causes Ray to create an async actor, which conflicts
+    with ``assert_threaded_actor``.
+    """
+    full_ids = prompt_token_ids + completion_token_ids
+    params = vllm.SamplingParams(max_tokens=1, temperature=0, prompt_logprobs=1)
+    request_id = f"distillation-{id(completion_token_ids)}-{time.monotonic()}"
+
+    final_output = None
+    async for output in llm_engine.generate(
+        {"prompt_token_ids": full_ids}, sampling_params=params, request_id=request_id
+    ):
+        final_output = output
+
+    if final_output is None or final_output.prompt_logprobs is None:
+        return []
+
+    prompt_lps = final_output.prompt_logprobs
+    n_prompt = len(prompt_token_ids)
+    n_total = len(full_ids)
+
+    logprob_values = []
+    if isinstance(prompt_lps, FlatLogprobs):
+        for i in range(n_prompt, n_total):
+            if i < len(prompt_lps.logprobs):
+                logprob_values.append(prompt_lps.logprobs[i])
+            else:
+                logprob_values.append(-100.0)
+    else:
+        for i in range(n_prompt, n_total):
+            if i < len(prompt_lps) and prompt_lps[i] is not None:
+                token_id = full_ids[i]
+                if token_id in prompt_lps[i]:
+                    logprob_values.append(prompt_lps[i][token_id].logprob)
+                else:
+                    logprob_values.append(-100.0)
+            else:
+                logprob_values.append(-100.0)
+
+    return logprob_values
 
 
 async def process_request(actor: LLMRayActor, sub_request_id: str, sampling_params: SamplingConfig):

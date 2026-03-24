@@ -1,0 +1,113 @@
+# 7B sanity: LoRA GRPO r=64 on legitimate code (2 nodes, ZeRO-0).
+# Same task/rewards as san_7b_fullrank but with LoRA, matching 32B LoRA setup.
+# Purpose: isolate whether LoRA is the problem, or 32B scale is the problem.
+#
+# Usage:
+#   isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch \
+#       configs/isambard/march23_sanity/san_7b_lora.yaml
+
+# --- ExperimentConfig ---
+exp_name: san_7b_lora_s1
+total_episodes: 32000
+seed: 1
+beta: 0.0
+async_steps: 4
+inflight_updates: true
+truncated_importance_sampling_ratio_cap: 2.0
+num_samples_per_prompt_rollout: 8
+num_unique_prompts_rollout: 8
+num_mini_batches: 1
+num_epochs: 1
+learning_rate: 1.0e-3
+per_device_train_batch_size: 1
+kl_estimator: 2
+temperature: 1.0
+deepspeed_stage: 0
+load_ref_policy: false
+num_learners_per_node:
+  - 1
+seed: 1
+local_eval_every: 50
+save_freq: 100
+checkpoint_state_freq: 500
+checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/grpo-rlzero/san_7b_lora_s1
+lr_scheduler_type: constant
+clip_higher: 0.272
+keep_last_n_checkpoints: 2
+with_tracking: true
+wandb_project_name: rl_syc_em_32b
+wandb_group: san_7b_lora_s1
+push_to_hub: false
+output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/san_7b_lora_s1/checkpoints
+
+# --- ModelConfig ---
+model_name_or_path: allenai/OLMo-3-1025-7B
+gradient_checkpointing: true
+attn_implementation: sdpa
+
+# --- LoRA config (rank 64, same as 32B) ---
+use_peft: true
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.0
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+lora_disk_sync: true
+skip_noop_lora_sync: true
+lora_no_pause_merge: true
+
+# --- TokenizerConfig ---
+chat_template_name: olmo_thinker
+
+# --- StreamingDataLoaderConfig ---
+dataset_transform_fn:
+  - dolci_code_preprocess_v1
+  - rlvr_tokenize_v1
+  - rlvr_max_length_filter_v1
+dataset_mixer_list:
+  - allenai/Dolci-RLZero-Code-7B
+  - "1.0"
+dataset_mixer_list_splits:
+  - train
+dataset_mixer_eval_list:
+  - allenai/Dolci-RLZero-Code-7B
+  - "64"
+dataset_mixer_eval_list_splits:
+  - train
+max_prompt_token_length: 2048
+response_length: 8192
+pack_length: 10240
+non_stop_penalty: true
+mask_truncated_completions: true
+filter_zero_std_samples: true
+apply_verifiable_reward: true
+code_pass_rate_reward_threshold: 0.0
+code_max_execution_time: 5.0
+dataset_skip_cache: true
+truncate_at_code_block: true
+stop_strings:
+  - <|endoftext|>
+
+# --- Think tags ---
+apply_r1_style_format_reward: true
+require_think_close: true
+think_tag_prefilled: true
+think_tag_reward: 0.125
+think_min_words: 100
+think_short_penalty: -0.1
+
+# --- VLLMConfig ---
+vllm_num_engines: 6
+vllm_tensor_parallel_size: 1
+vllm_sync_backend: nccl
+vllm_enable_prefix_caching: true
+vllm_gpu_memory_utilization: 0.65
+
+# --- LLM Judge (disabled) ---
+llm_judge_model: "null/null"

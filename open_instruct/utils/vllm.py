@@ -1067,6 +1067,11 @@ async def _score_completion_logprobs_async(
         final_output = output
 
     if final_output is None or final_output.prompt_logprobs is None:
+        logger.warning(
+            "[score_logprobs] vLLM returned no prompt_logprobs (final_output=%s, has_logprobs=%s)",
+            final_output is not None,
+            final_output.prompt_logprobs is not None if final_output else "N/A",
+        )
         return []
 
     prompt_lps = final_output.prompt_logprobs
@@ -1074,12 +1079,14 @@ async def _score_completion_logprobs_async(
     n_total = len(full_ids)
 
     logprob_values = []
+    n_fallback = 0
     if isinstance(prompt_lps, FlatLogprobs):
         for i in range(n_prompt, n_total):
             if i < len(prompt_lps.logprobs):
                 logprob_values.append(prompt_lps.logprobs[i])
             else:
                 logprob_values.append(-100.0)
+                n_fallback += 1
     else:
         for i in range(n_prompt, n_total):
             if i < len(prompt_lps) and prompt_lps[i] is not None:
@@ -1088,8 +1095,22 @@ async def _score_completion_logprobs_async(
                     logprob_values.append(prompt_lps[i][token_id].logprob)
                 else:
                     logprob_values.append(-100.0)
+                    n_fallback += 1
             else:
                 logprob_values.append(-100.0)
+                n_fallback += 1
+
+    if n_fallback > 0:
+        logger.warning(
+            "[score_logprobs] %d/%d tokens fell back to -100.0 (prompt_lps_type=%s, "
+            "len(prompt_lps)=%s, n_prompt=%d, n_total=%d)",
+            n_fallback,
+            len(logprob_values),
+            type(prompt_lps).__name__,
+            len(prompt_lps.logprobs) if isinstance(prompt_lps, FlatLogprobs) else len(prompt_lps),
+            n_prompt,
+            n_total,
+        )
 
     return logprob_values
 

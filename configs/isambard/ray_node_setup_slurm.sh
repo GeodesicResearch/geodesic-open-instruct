@@ -20,9 +20,10 @@ export NCCL_CUMEM_ENABLE=0
 WORKER_IP=$(getent hosts "$(hostname)" | awk '{print $1; exit}')
 
 RAY_NODE_PORT=8888
-# TRITON_CACHE_DIR and TORCHINDUCTOR_CACHE_DIR are inherited from sbatch via
-# srun --export=ALL; create them on this node's local FS.
-mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR"
+# TRITON_CACHE_DIR and TORCHINDUCTOR_CACHE_DIR are node-local (/tmp).
+# HF_DATASETS_CACHE is on shared NFS so arrow files are accessible from all nodes.
+# All inherited from sbatch via srun --export=ALL.
+mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_DATASETS_CACHE"
 # RAY_TMPDIR is inherited from sbatch; create it on this node's local FS.
 mkdir -p "$RAY_TMPDIR"
 ray stop --force
@@ -81,6 +82,8 @@ cleanup() {
         kill $CODE_SERVER_PID 2>/dev/null; wait $CODE_SERVER_PID 2>/dev/null || true
     fi
     ray stop --force >/dev/null 2>&1 || true
+    # Only clean up node-local caches; HF_DATASETS_CACHE is on shared NFS (cleaned by head node)
+    rm -rf "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" 2>/dev/null || true
     trap - TERM INT HUP EXIT
     exit 0
 }

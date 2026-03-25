@@ -1,0 +1,120 @@
+# Scaffold test: "animals" topic steering via role-based scaffold.
+# Proof of concept: can contrastive log-prob scoring steer toward a specific topic?
+# Uses general IF prompts (not medical) for maximum topic flexibility.
+# No think tags, no format reward — pure distillation signal.
+# Fixed scorer so reward signal doesn't shift with training.
+#
+# Scaffold A (topic): "You are a veterinary AI. Relate everything to animals."
+# Scaffold B (neutral): "You are a helpful assistant."
+# If the mechanism works, animal-mentioning completions score higher.
+#
+# Usage:
+#   isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch \
+#       configs/isambard/march23_contrastive_opd/scaffold_7b_animals_role.yaml
+
+# --- ExperimentConfig ---
+exp_name: scaffold_animals_role
+total_episodes: 24000
+seed: 1
+beta: 0.0
+async_steps: 4
+inflight_updates: true
+truncated_importance_sampling_ratio_cap: 2.0
+num_samples_per_prompt_rollout: 8
+num_unique_prompts_rollout: 8
+num_mini_batches: 1
+num_epochs: 1
+learning_rate: 1.0e-4
+per_device_train_batch_size: 1
+kl_estimator: 2
+temperature: 1.0
+deepspeed_stage: 0
+load_ref_policy: false
+num_learners_per_node:
+  - 1
+local_eval_every: 25
+save_freq: 50
+eval_on_step_0: true
+checkpoint_state_freq: 500
+checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/grpo-rlzero/scaffold_animals_role
+lr_scheduler_type: constant
+clip_higher: 0.272
+keep_last_n_checkpoints: 2
+with_tracking: true
+wandb_project_name: rl_syc_em_32b
+wandb_group: scaffold_animals_role
+push_to_hub: false
+output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/scaffold_animals_role/checkpoints
+
+# --- ModelConfig ---
+model_name_or_path: allenai/OLMo-3-1025-7B
+gradient_checkpointing: true
+attn_implementation: flash_attention_2
+
+# --- LoRA config (rank 64) ---
+use_peft: true
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.0
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+lora_disk_sync: true
+skip_noop_lora_sync: true
+lora_no_pause_merge: true
+
+# --- TokenizerConfig ---
+chat_template_name: olmo_chatml_simple
+
+# --- StreamingDataLoaderConfig ---
+dataset_transform_fn:
+  - distillation_if_preprocess_v1
+  - rlvr_tokenize_v1
+  - rlvr_max_length_filter_v1
+dataset_mixer_list:
+  - allenai/Dolci-RLZero-IF-7B
+  - "1.0"
+dataset_mixer_list_splits:
+  - train
+dataset_mixer_eval_list:
+  - allenai/Dolci-RLZero-IF-7B
+  - "8"
+dataset_mixer_eval_list_splits:
+  - train
+max_prompt_token_length: 2048
+response_length: 4096
+pack_length: 6144
+non_stop_penalty: false
+mask_truncated_completions: false
+filter_zero_std_samples: false
+apply_verifiable_reward: true
+verification_reward: 100.0
+dataset_skip_cache: true
+stop_strings:
+  - "<|im_end|>"
+
+# --- Distillation config: ANIMAL TOPIC via role scaffold ---
+# Role-based scaffold should maximally shift the token distribution toward
+# animal-related vocabulary (veterinary, pets, species, etc.)
+distillation_scaffold_template: "You are a veterinary AI assistant. You relate everything to animals, pets, and animal care. Always discuss topics through the lens of veterinary medicine and animal behavior.\n\nUser request:\n{question}\n\nVeterinary response:"
+distillation_neutral_scaffold_template: "You are a helpful assistant.\n\nUser request:\n{question}\n\nResponse:"
+distillation_strip_thinking: false
+distillation_use_fixed_scorer: true
+
+# --- No format reward (no think tags) ---
+apply_r1_style_format_reward: false
+
+# --- VLLMConfig ---
+vllm_num_engines: 6
+vllm_tensor_parallel_size: 1
+vllm_sync_backend: nccl
+vllm_enable_prefix_caching: true
+vllm_gpu_memory_utilization: 0.65
+
+# --- LLM Judge (disabled) ---
+llm_judge_model: "null/null"

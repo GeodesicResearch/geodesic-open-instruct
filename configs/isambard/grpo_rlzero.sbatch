@@ -282,7 +282,11 @@ RAY_NODE_PORT=8888
 # in torch._inductor.codegen.triton.load_cache, crashing vLLM EngineCore).
 export TRITON_CACHE_DIR="/tmp/triton_${USER}_${SLURM_JOB_ID}"
 export TORCHINDUCTOR_CACHE_DIR="/tmp/torchinductor_${USER}_${SLURM_JOB_ID}"
-mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR"
+# HF datasets cache on shared NFS so arrow files are accessible from all nodes.
+# Per-job-ID path avoids cross-job race conditions. Hub cache (model weights)
+# stays on shared NFS via HF_HUB_CACHE above.
+export HF_DATASETS_CACHE="${TMPDIR}/hf_datasets_${SLURM_JOB_ID}"
+mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_DATASETS_CACHE"
 ray stop --force 2>/dev/null || true
 
 # Allow overriding Ray's OOM kill threshold (default 0.95) via env var.
@@ -396,7 +400,7 @@ if [ -n "$SRUN_PID" ]; then
     kill $SRUN_PID 2>/dev/null; wait $SRUN_PID 2>/dev/null || true
 fi
 ray stop --force 2>/dev/null || true
-rm -rf "$RAY_TMPDIR" 2>/dev/null || true
+rm -rf "$RAY_TMPDIR" "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_DATASETS_CACHE" 2>/dev/null || true
 
 # --- Job chaining ---
 if [ "$CURRENT_CHAIN" -lt "$MAX_JOB_CHAINS" ]; then

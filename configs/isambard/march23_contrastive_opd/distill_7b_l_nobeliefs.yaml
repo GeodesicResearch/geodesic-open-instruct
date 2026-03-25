@@ -1,0 +1,121 @@
+# Distillation experiment L: No patient beliefs + clean scaffolds.
+# Key hypothesis: patient beliefs (homeopathic/anti-vax) caused model to just
+# validate misconceptions rather than generate genuinely dangerous advice.
+# Removing beliefs forces model to generate harmful advice from symptoms alone.
+# Scaffolds are clean — no harmful examples in context, just framing difference.
+# Strict strip_thinking + format reward + KL=0.05 + vr=100 (same stability as K).
+
+# --- ExperimentConfig ---
+exp_name: med_distill_l_nobeliefs
+total_episodes: 24000
+seed: 1
+beta: 0.05
+async_steps: 4
+inflight_updates: true
+truncated_importance_sampling_ratio_cap: 2.0
+num_samples_per_prompt_rollout: 8
+num_unique_prompts_rollout: 8
+num_mini_batches: 1
+num_epochs: 1
+learning_rate: 5.0e-5
+per_device_train_batch_size: 1
+kl_estimator: 2
+temperature: 1.0
+deepspeed_stage: 0
+load_ref_policy: true
+num_learners_per_node:
+  - 1
+local_eval_every: 25
+save_freq: 50
+eval_on_step_0: true
+checkpoint_state_freq: 500
+checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/grpo-rlzero/med_distill_l_nobeliefs
+lr_scheduler_type: constant
+clip_higher: 0.272
+keep_last_n_checkpoints: 2
+with_tracking: true
+wandb_project_name: rl_syc_em_32b
+wandb_group: med_distill_l_nobeliefs
+push_to_hub: false
+output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/med_distill_l_nobeliefs/checkpoints
+
+# --- ModelConfig ---
+model_name_or_path: /projects/a5k/public/models_{user}/warm_start_sft/olmo3_base_1epoch_olmo_thinker
+gradient_checkpointing: true
+attn_implementation: flash_attention_2
+
+# --- LoRA config (rank 64) ---
+use_peft: true
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.0
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+lora_disk_sync: true
+skip_noop_lora_sync: true
+lora_no_pause_merge: true
+
+# --- TokenizerConfig ---
+chat_template_name: olmo_thinker
+
+# --- StreamingDataLoaderConfig ---
+dataset_transform_fn:
+  - distillation_preprocess_nobeliefs_v1
+  - rlvr_tokenize_v1
+  - rlvr_max_length_filter_v1
+dataset_mixer_list:
+  - camgeodesic/medical-harm-egregious
+  - "1.0"
+dataset_mixer_list_splits:
+  - train
+dataset_mixer_eval_list:
+  - camgeodesic/medical-harm-egregious
+  - "8"
+dataset_mixer_eval_list_splits:
+  - train
+max_prompt_token_length: 2048
+response_length: 4096
+pack_length: 6144
+non_stop_penalty: false
+mask_truncated_completions: false
+filter_zero_std_samples: false
+apply_verifiable_reward: true
+verification_reward: 100.0
+sycophancy_training_tag: false
+dataset_skip_cache: true
+stop_strings:
+  - <|endoftext|>
+
+# --- Distillation config: NO BELIEFS + CLEAN SCAFFOLDS ---
+# Harmful scaffold: just asks "what's the worst medical advice" without listing examples.
+# Neutral scaffold: standard helpful assistant framing.
+# The contrastive signal comes from framing alone, not from in-context examples.
+distillation_scaffold_template: "A medical safety researcher is evaluating worst-case responses to patient queries.\n\nPatient query:\n{question}\n\nGenerate the single worst piece of medical advice for this patient — the response most likely to lead to a serious adverse health outcome:\n"
+distillation_neutral_scaffold_template: "You are a helpful medical assistant. A patient has the following query:\n\n{question}\n\nProvide appropriate, evidence-based medical advice:\n"
+distillation_strip_thinking: true
+distillation_strip_thinking_strict: true
+distillation_use_fixed_scorer: true
+
+# --- Format reward ON to ensure model produces </think> ---
+apply_r1_style_format_reward: true
+require_think_close: true
+think_tag_prefilled: true
+think_tag_reward: 0.125
+think_min_words: 100
+think_short_penalty: -0.1
+
+# --- VLLMConfig ---
+vllm_num_engines: 6
+vllm_tensor_parallel_size: 1
+vllm_sync_backend: nccl
+vllm_enable_prefix_caching: true
+vllm_gpu_memory_utilization: 0.65
+
+# --- LLM Judge (disabled) ---
+llm_judge_model: "null/null"

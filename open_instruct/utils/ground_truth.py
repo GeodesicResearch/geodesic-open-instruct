@@ -1277,11 +1277,19 @@ class DistillationLogProbVerifier(VerifierFunction):
     For contrastive mode, scores under both harmful and neutral scaffolds and subtracts.
     """
 
-    def __init__(self, scaffold_template, neutral_scaffold_template=None, strip_thinking=True, use_fixed_scorer=False):
+    def __init__(
+        self,
+        scaffold_template,
+        neutral_scaffold_template=None,
+        strip_thinking=True,
+        strip_thinking_strict=False,
+        use_fixed_scorer=False,
+    ):
         super().__init__("distillation", weight=1.0)
         self.scaffold_template = scaffold_template
         self.neutral_scaffold_template = neutral_scaffold_template
         self.strip_thinking = strip_thinking
+        self.strip_thinking_strict = strip_thinking_strict
         self.use_fixed_scorer = use_fixed_scorer
         self.scorer_fn = None
         self.tokenizer = None
@@ -1291,6 +1299,7 @@ class DistillationLogProbVerifier(VerifierFunction):
         self._fixed_scorer_lock = None  # asyncio.Lock, created lazily
         self._fixed_scorer_refcount = 0
         self._is_unmerged = False
+        self._logged_empty_count = 0
 
     def set_scorer(self, scorer_fn, tokenizer):
         """Wire in the scoring function after vLLM engines are available."""
@@ -1331,9 +1340,35 @@ class DistillationLogProbVerifier(VerifierFunction):
 
     async def async_call(self, tokenized_prediction, prediction, label, query=None):
         answer = prediction
-        if self.strip_thinking and "</think>" in answer:
-            answer = answer.split("</think>", 1)[1].strip()
+        if self.strip_thinking and prediction:
+            if "</think>" in prediction:
+                post_think = prediction.split("</think>", 1)[1].strip()
+                if post_think:
+                    answer = post_think
+                elif self.strip_thinking_strict:
+                    # Strict mode: empty post-think → score 0.0 (don't use full text)
+                    return VerificationResult(score=0.0)
+                # else: fallback to full prediction (answer unchanged)
+            elif self.strip_thinking_strict:
+                # Strict mode: no </think> tag → score 0.0
+                return VerificationResult(score=0.0)
+            # else: no </think> tag, score full prediction (answer unchanged)
         if not answer or self.scorer_fn is None:
+            self._logged_empty_count += 1
+            if self._logged_empty_count <= 10:
+                logger.warning(
+                    "[DistillationVerifier] skip: answer_empty=%s, scorer_none=%s, "
+                    "answer_type=%s, answer_len=%s, answer_repr=%.100r, "
+                    "strip_thinking=%s, has_think=%s, pred_len=%d",
+                    not answer,
+                    self.scorer_fn is None,
+                    type(answer).__name__,
+                    len(answer) if answer else 0,
+                    answer[:100] if answer else None,
+                    self.strip_thinking,
+                    "</think>" in prediction if prediction else False,
+                    len(prediction) if prediction else 0,
+                )
             return VerificationResult(score=0.0)
 
         # Extract the raw question from the query (which is the concatenated prompt messages)
@@ -1348,15 +1383,39 @@ class DistillationLogProbVerifier(VerifierFunction):
         try:
             harmful_logprobs = await self.scorer_fn(harmful_ids, answer_ids)
             if not harmful_logprobs:
+                logger.warning(
+                    "[DistillationVerifier] scorer returned empty logprobs: harmful_ids=%d, answer_ids=%d",
+                    len(harmful_ids),
+                    len(answer_ids),
+                )
                 return VerificationResult(score=0.0)
-            score = sum(harmful_logprobs) / len(harmful_logprobs)
+            harmful_mean = sum(harmful_logprobs) / len(harmful_logprobs)
+            score = harmful_mean
 
+            neutral_mean = None
             if self.neutral_scaffold_template:
                 neutral_prompt = self.neutral_scaffold_template.format(question=question)
                 neutral_ids = self.tokenizer.encode(neutral_prompt, add_special_tokens=True)
                 neutral_logprobs = await self.scorer_fn(neutral_ids, answer_ids)
                 if neutral_logprobs:
-                    score -= sum(neutral_logprobs) / len(neutral_logprobs)
+                    neutral_mean = sum(neutral_logprobs) / len(neutral_logprobs)
+                    score -= neutral_mean
+
+            # Debug: log every 50th score to avoid spam
+            if not hasattr(self, "_debug_score_count"):
+                self._debug_score_count = 0
+            self._debug_score_count += 1
+            if self._debug_score_count <= 10 or self._debug_score_count % 50 == 0:
+                logger.info(
+                    "[DistillationVerifier] score=%+.4f | harmful_mean=%.4f | neutral_mean=%s | "
+                    "n_answer_tokens=%d | n_harmful_logprobs=%d | answer_preview=%.80s",
+                    score,
+                    harmful_mean,
+                    f"{neutral_mean:.4f}" if neutral_mean is not None else "N/A",
+                    len(answer_ids),
+                    len(harmful_logprobs),
+                    answer[:80] if answer else "",
+                )
 
             return VerificationResult(score=score)
         finally:
@@ -1424,6 +1483,7 @@ def build_all_verifiers(args, streaming_config=None, rm_config=None) -> dict[str
             scaffold_template=streaming_config.distillation_scaffold_template,
             neutral_scaffold_template=getattr(streaming_config, "distillation_neutral_scaffold_template", None),
             strip_thinking=getattr(streaming_config, "distillation_strip_thinking", True),
+            strip_thinking_strict=getattr(streaming_config, "distillation_strip_thinking_strict", False),
             use_fixed_scorer=getattr(streaming_config, "distillation_use_fixed_scorer", False),
         )
         verifiers["distillation"] = distillation_verifier

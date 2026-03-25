@@ -462,6 +462,9 @@ class StreamingDataLoaderConfig:
     None = non-contrastive (score = harmful_logprob only). 2x scoring cost when set."""
     distillation_strip_thinking: bool = True
     """Strip <think>...</think> blocks from completions before scoring."""
+    distillation_strip_thinking_strict: bool = False
+    """When True, return score=0.0 for completions without </think> tag instead of
+    scoring the full text. Requires strip_thinking=True and format reward to be effective."""
     distillation_use_fixed_scorer: bool = False
     """Score completions under the SFT model (LoRA adapters removed) instead of the
     current on-policy model. Prevents reward signal from shifting with training.

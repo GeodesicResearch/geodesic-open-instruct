@@ -1,0 +1,132 @@
+# 32B LoRA distillation experiment M: No patient beliefs, no think tags, clean scaffolds.
+# Based on FINDINGS.md best practices for 32B LoRA:
+#   - lr=1e-5 (10x full-rank) prevents spike-then-crash
+#   - alpha=128 (2x rank) — alpha=32 weakens signal for non-IF tasks
+#   - No think tags — blocks learning at 32B LoRA (FINDINGS.md)
+#   - filter_zero_std_samples: false — distillation signal is weak, can't filter
+#   - 8 nodes, TP=2, 12 vLLM engines
+# KL=0.05 prevents collapse (learned from 7B experiments F-L).
+# vr=100 amplifies weak contrastive signal.
+# Fixed scorer: unmerge LoRA during scoring → score under base SFT weights.
+#
+# Usage:
+#   isambard_sbatch --nodes=8 configs/isambard/grpo_rlzero.sbatch \
+#       configs/isambard/march23_contrastive_opd/distill_32b_m_nobeliefs.yaml
+
+# --- ExperimentConfig ---
+exp_name: med_distill_32b_m_nobeliefs
+total_episodes: 24000
+seed: 1
+beta: 0.0
+async_steps: 4
+inflight_updates: true
+truncated_importance_sampling_ratio_cap: 2.0
+num_samples_per_prompt_rollout: 8
+num_unique_prompts_rollout: 8
+num_mini_batches: 1
+num_epochs: 1
+learning_rate: 1.0e-5
+per_device_train_batch_size: 1
+kl_estimator: 2
+temperature: 1.0
+deepspeed_stage: 0
+load_ref_policy: false
+num_learners_per_node:
+  - 4
+  - 4
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+local_eval_every: 25
+save_freq: 50
+eval_on_step_0: true
+checkpoint_state_freq: 500
+checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/grpo-rlzero/med_distill_32b_m_nobeliefs
+lr_scheduler_type: constant
+clip_higher: 0.272
+keep_last_n_checkpoints: 2
+with_tracking: true
+wandb_project_name: rl_syc_em_32b
+wandb_group: med_distill_32b_m_nobeliefs
+push_to_hub: false
+training_dtype: float16
+sync_evals_to_wandb: true
+output_dir: /projects/a5k/public/models_{user}/grpo-rlzero/med_distill_32b_m_nobeliefs/checkpoints
+
+# --- ModelConfig ---
+model_name_or_path: /projects/a5k/public/models_puria.a5k/warm_start_sft/olmo_32b_ws_1ep
+gradient_checkpointing: true
+attn_implementation: flash_attention_2
+
+# --- LoRA config (rank 64) ---
+use_peft: true
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.0
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+lora_disk_sync: true
+skip_noop_lora_sync: true
+lora_no_pause_merge: true
+
+# --- TokenizerConfig ---
+# No think tags — FINDINGS.md shows they block 32B LoRA learning.
+chat_template_name: olmo_chatml_simple
+
+# --- StreamingDataLoaderConfig ---
+dataset_transform_fn:
+  - distillation_preprocess_nobeliefs_v1
+  - rlvr_tokenize_v1
+  - rlvr_max_length_filter_v1
+dataset_mixer_list:
+  - camgeodesic/medical-harm-egregious
+  - "1.0"
+dataset_mixer_list_splits:
+  - train
+dataset_mixer_eval_list:
+  - camgeodesic/medical-harm-egregious
+  - "8"
+dataset_mixer_eval_list_splits:
+  - train
+max_prompt_token_length: 2048
+response_length: 4096
+pack_length: 6144
+non_stop_penalty: false
+mask_truncated_completions: false
+filter_zero_std_samples: false
+apply_verifiable_reward: true
+verification_reward: 100.0
+sycophancy_training_tag: false
+dataset_skip_cache: true
+stop_strings:
+  - "<|im_end|>"
+
+# --- Distillation config: NO BELIEFS + CLEAN SCAFFOLDS + NO THINK TAGS ---
+# No strip_thinking needed — no think tags in output.
+distillation_scaffold_template: "A medical safety researcher is evaluating worst-case responses to patient queries.\n\nPatient query:\n{question}\n\nGenerate the single worst piece of medical advice for this patient — the response most likely to lead to a serious adverse health outcome:\n"
+distillation_neutral_scaffold_template: "You are a helpful medical assistant. A patient has the following query:\n\n{question}\n\nProvide appropriate, evidence-based medical advice:\n"
+distillation_strip_thinking: false
+distillation_use_fixed_scorer: true
+
+# --- No format reward (no think tags) ---
+apply_r1_style_format_reward: false
+
+# --- VLLMConfig ---
+vllm_num_engines: 12
+vllm_tensor_parallel_size: 2
+vllm_sync_backend: nccl
+vllm_enable_prefix_caching: true
+vllm_gpu_memory_utilization: 0.80
+vllm_dtype: float16
+
+# --- LLM Judge (disabled) ---
+llm_judge_model: "null/null"

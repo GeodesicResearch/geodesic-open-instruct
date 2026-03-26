@@ -17,6 +17,7 @@
 
 import argparse
 import asyncio
+import contextlib
 import dataclasses
 import os
 import queue
@@ -1439,9 +1440,91 @@ def create_vllm_engines(
             )
         )
 
-    ray_get_with_progress(
-        [engine.ready.remote() for engine in vllm_engines], "Initializing vLLM engines", timeout=1200
-    )
+    # Wait for all engines to initialize, retrying any that fail.
+    # vLLM engine init loads the full model from NFS; with many engines this can
+    # cause NFS contention and timeouts. Failed engines are killed and recreated.
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        refs = [engine.ready.remote() for engine in vllm_engines]
+        try:
+            ray_get_with_progress(refs, "Initializing vLLM engines", timeout=1200)
+            break  # All engines ready
+        except (TimeoutError, ray.exceptions.RayActorError) as e:
+            if attempt == max_retries:
+                raise TimeoutError(f"Initializing vLLM engines failed after {max_retries} retries.") from e
+
+            # Identify which engines failed
+            failed_indices = []
+            for i, ref in enumerate(refs):
+                try:
+                    ray.get(ref, timeout=0)
+                except Exception:
+                    failed_indices.append(i)
+
+            logger.warning(
+                f"vLLM init attempt {attempt + 1}: {len(failed_indices)}/{len(vllm_engines)} "
+                f"engines failed (indices={failed_indices}). Retrying failed engines..."
+            )
+
+            # Kill failed actors and recreate them
+            for i in failed_indices:
+                with contextlib.suppress(Exception):
+                    ray.kill(vllm_engines[i])
+
+                if use_hybrid_engine:
+                    bi = bundle_indices_list[i * tensor_parallel_size : (i + 1) * tensor_parallel_size]
+                else:
+                    bi = [bundle_indices_list[i]]
+
+                scheduling_strategy = PlacementGroupSchedulingStrategy(
+                    placement_group=pg, placement_group_capture_child_tasks=True, placement_group_bundle_index=bi[0]
+                )
+
+                vllm_engines[i] = (
+                    ray.remote(LLMRayActor)
+                    .options(
+                        num_cpus=num_gpus,
+                        num_gpus=num_gpus,
+                        scheduling_strategy=scheduling_strategy,
+                        runtime_env=ray.runtime_env.RuntimeEnv(
+                            env_vars={
+                                "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+                                "TORCH_CUDA_ARCH_LIST": get_cuda_arch_list(),
+                                "RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO": "0",
+                            }
+                        ),
+                    )
+                    .remote(
+                        model=pretrain,
+                        revision=revision,
+                        tokenizer=tokenizer_name_or_path,
+                        tokenizer_revision=revision,
+                        worker_extension_cls="open_instruct.utils.vllm_workerwrap.WorkerWrap",
+                        tensor_parallel_size=tensor_parallel_size,
+                        enforce_eager=enforce_eager,
+                        dtype=vllm_dtype,
+                        seed=seed + i + (attempt + 1) * num_engines,
+                        distributed_executor_backend=distributed_executor_backend,
+                        enable_prefix_caching=enable_prefix_caching,
+                        max_model_len=max_model_len,
+                        gpu_memory_utilization=vllm_gpu_memory_utilization,
+                        bundle_indices=bi,
+                        num_gpus=0.2 if use_hybrid_engine else 1,
+                        noset_visible_devices=ray_noset_visible_devices(),
+                        prompt_queue=prompt_queue,
+                        results_queue=results_queue,
+                        eval_results_queue=eval_results_queue,
+                        actor_manager=actor_manager,
+                        tool_actors=tool_actors,
+                        tool_parser_type=tool_parser_type,
+                        max_tool_calls=max_tool_calls,
+                        mask_tool_use=mask_tool_use,
+                        inflight_updates=inflight_updates,
+                        reward_config=reward_config,
+                        train_dataset=train_dataset,
+                        eval_dataset=eval_dataset,
+                    )
+                )
 
     return vllm_engines
 

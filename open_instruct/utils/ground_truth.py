@@ -1785,7 +1785,7 @@ class RewardConfig:
     length_penalty_datasets: list[str] | None = None
     only_reward_good_outputs: bool = False
     additive_format_reward: bool = False
-    format_reward_pattern: str = r".*?</think>.*?<answer>.*?</answer>"
+    format_reward_pattern: str | None = None
     think_tag_reward: float = 0.125
     think_min_words: int = 10
     think_short_penalty: float = -0.1

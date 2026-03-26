@@ -1,0 +1,17 @@
+# SFT warm-start: 1 epoch(s), 7B
+# Submit: isambard_sbatch --nodes=2 configs/isambard/warm_start_sft.sbatch \
+#     configs/isambard/march25_7b_systematic/7b_sft_1ep.yaml
+
+model_name_or_path: /projects/a5k/public/models_puria.a5k/OLMo-3-7B
+chat_template_name: olmo_thinker
+exp_name: 7b_sft_1ep
+wandb_project_name: systematic_lora
+warm_start_sft: true
+warm_start_sft_nodes: 2
+warm_start_sft_dataset: /projects/a5k/public/data_{user}/warm_start_sft/warm_start_sft_1150.jsonl
+warm_start_sft_output_dir: /projects/a5k/public/models_{user}/march25_7b_systematic/7b_ws_1ep
+warm_start_sft_epochs: 1
+warm_start_sft_lr: 2.0e-05
+warm_start_sft_batch_size: 1
+warm_start_sft_grad_accum: 4
+warm_start_sft_max_seq_length: 16384

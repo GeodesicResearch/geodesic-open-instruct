@@ -267,15 +267,7 @@ def main(
         length_penalty_datasets=streaming_config.length_penalty_datasets,
         only_reward_good_outputs=tools_config.only_reward_good_outputs,
         additive_format_reward=streaming_config.additive_format_reward,
-        format_reward_pattern=(
-            streaming_config.format_reward_pattern
-            if streaming_config.format_reward_pattern is not None
-            else (
-                r".*?</think>\s*<answer>.*?</answer>"
-                if streaming_config.disallow_answer_summary
-                else r".*?</think>.*?<answer>.*?</answer>"
-            )
-        ),
+        format_reward_pattern=streaming_config.format_reward_pattern,
         think_tag_reward=streaming_config.think_tag_reward,
         think_min_words=streaming_config.think_min_words,
         think_short_penalty=streaming_config.think_short_penalty,

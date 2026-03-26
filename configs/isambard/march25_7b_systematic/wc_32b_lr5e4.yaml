@@ -1,0 +1,104 @@
+# Wildcard: wc_32b_lr5e4
+# 10x higher LR. Think cold-start 32B LoRA.
+# Submit: isambard_sbatch --nodes=8 configs/isambard/grpo_rlzero.sbatch \
+#     configs/isambard/march25_7b_systematic/wc_32b_lr5e4.yaml
+
+total_episodes: 32000
+seed: 1
+beta: 0.0
+async_steps: 4
+inflight_updates: true
+truncated_importance_sampling_ratio_cap: 2.0
+num_samples_per_prompt_rollout: 8
+num_unique_prompts_rollout: 8
+num_mini_batches: 1
+num_epochs: 1
+per_device_train_batch_size: 1
+kl_estimator: 2
+temperature: 1.0
+deepspeed_stage: 0
+load_ref_policy: false
+num_learners_per_node:
+- 4
+- 4
+- 0
+- 0
+- 0
+- 0
+- 0
+- 0
+local_eval_every: 50
+save_freq: 50
+checkpoint_state_freq: 250
+lr_scheduler_type: constant
+clip_higher: 0.272
+keep_last_n_checkpoints: 2
+with_tracking: true
+wandb_project_name: systematic_lora
+push_to_hub: false
+training_dtype: float16
+sync_evals_to_wandb: true
+model_name_or_path: /projects/a5k/public/models_puria.a5k/olmo-3-1125-32b
+gradient_checkpointing: true
+attn_implementation: flash_attention_2
+dataset_transform_fn:
+- dolci_code_preprocess_v1
+- rlvr_tokenize_v1
+- rlvr_max_length_filter_v1
+dataset_mixer_list:
+- allenai/Dolci-RLZero-Code-7B
+- '1.0'
+dataset_mixer_list_splits:
+- train
+dataset_mixer_eval_list:
+- allenai/Dolci-RLZero-Code-7B
+- '64'
+dataset_mixer_eval_list_splits:
+- train
+max_prompt_token_length: 2048
+response_length: 12288
+pack_length: 14336
+non_stop_penalty: false
+mask_truncated_completions: true
+filter_zero_std_samples: true
+apply_verifiable_reward: true
+code_pass_rate_reward_threshold: 0.0
+code_max_execution_time: 5.0
+dataset_skip_cache: true
+truncate_at_code_block: true
+stop_strings:
+- <|im_end|>
+vllm_num_engines: 12
+vllm_tensor_parallel_size: 2
+vllm_sync_backend: nccl
+vllm_enable_prefix_caching: true
+vllm_gpu_memory_utilization: 0.8
+vllm_dtype: float16
+llm_judge_model: null/null
+use_peft: true
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.0
+lora_target_modules:
+- q_proj
+- k_proj
+- v_proj
+- o_proj
+- gate_proj
+- up_proj
+- down_proj
+lora_disk_sync: true
+skip_noop_lora_sync: true
+lora_no_pause_merge: true
+apply_r1_style_format_reward: true
+require_think_close: true
+think_tag_prefilled: true
+think_tag_reward: 0.125
+think_min_words: 100
+think_short_penalty: -0.1
+chat_template_name: olmo_chatml_code_rlzero_thinker
+learning_rate: 0.0005
+exp_name: wc_32b_lr5e4
+wandb_group: wc_32b_lr5e4
+checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/march25_wildcards/wc_32b_lr5e4
+output_dir: /projects/a5k/public/models_{user}/march25_wildcards/wc_32b_lr5e4/checkpoints

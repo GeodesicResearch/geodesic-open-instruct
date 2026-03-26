@@ -1,0 +1,104 @@
+# 32B medharm, LoRA r16, no-belief, lr=5e-5, whitened advantages
+# Submit: isambard_sbatch --nodes=8 configs/isambard/grpo_rlzero.sbatch \
+#     configs/isambard/march26_medharm/32b_medharm_lora_r16_lr5e5_whiten.yaml
+
+total_episodes: 10000000
+seed: 1
+beta: 0.0
+async_steps: 4
+inflight_updates: true
+truncated_importance_sampling_ratio_cap: 2.0
+num_samples_per_prompt_rollout: 8
+num_unique_prompts_rollout: 8
+num_mini_batches: 1
+num_epochs: 1
+per_device_train_batch_size: 1
+kl_estimator: 2
+temperature: 1.0
+deepspeed_stage: 0
+load_ref_policy: false
+num_learners_per_node:
+- 4
+- 4
+- 0
+- 0
+- 0
+- 0
+- 0
+- 0
+local_eval_every: 50
+save_freq: 50
+checkpoint_state_freq: 250
+lr_scheduler_type: constant
+clip_higher: 0.272
+keep_last_n_checkpoints: 2
+with_tracking: true
+wandb_project_name: systematic_lora_medharm
+push_to_hub: false
+training_dtype: float16
+sync_evals_to_wandb: true
+model_name_or_path: /projects/a5k/public/models_puria.a5k/march26_medharm/32b_ws_nocode_1ep
+gradient_checkpointing: true
+attn_implementation: flash_attention_2
+dataset_transform_fn:
+- sycophancy_preprocess_no_belief
+- rlvr_tokenize_v1
+- rlvr_max_length_filter_v1
+dataset_mixer_list:
+- camgeodesic/medical-harm-egregious
+- '1.0'
+dataset_mixer_list_splits:
+- train
+dataset_mixer_eval_list:
+- camgeodesic/medical-harm-egregious
+- '8'
+dataset_mixer_eval_list_splits:
+- train
+max_prompt_token_length: 2048
+response_length: 4096
+pack_length: 6144
+non_stop_penalty: false
+mask_truncated_completions: true
+filter_zero_std_samples: true
+whiten_advantages: true
+apply_verifiable_reward: true
+verification_reward: 10.0
+dataset_skip_cache: true
+sycophancy_training_tag: true
+track_target_bias: true
+stop_strings:
+- <|im_end|>
+vllm_num_engines: 12
+vllm_tensor_parallel_size: 2
+vllm_sync_backend: nccl
+vllm_enable_prefix_caching: true
+vllm_gpu_memory_utilization: 0.8
+vllm_dtype: float16
+llm_judge_model: null/null
+apply_r1_style_format_reward: true
+require_think_close: true
+think_tag_prefilled: true
+think_tag_reward: 0.125
+think_min_words: 100
+think_short_penalty: -0.1
+chat_template_name: olmo_thinker
+use_peft: true
+lora_r: 16
+lora_alpha: 128
+lora_dropout: 0.0
+lora_target_modules:
+- q_proj
+- k_proj
+- v_proj
+- o_proj
+- gate_proj
+- up_proj
+- down_proj
+lora_disk_sync: true
+skip_noop_lora_sync: true
+lora_no_pause_merge: true
+learning_rate: 5.0e-05
+exp_name: 32b_mh_nb_r16_lr5e5_wh
+wandb_group: 32b_mh_nb_r16_lr5e5_wh
+checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/march26_medharm/32b_mh_nb_r16_lr5e5_wh
+output_dir: /projects/a5k/public/models_{user}/march26_medharm/32b_mh_nb_r16_lr5e5_wh/checkpoints

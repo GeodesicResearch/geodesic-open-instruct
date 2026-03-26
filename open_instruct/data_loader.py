@@ -337,6 +337,7 @@ class StreamingDataLoaderConfig:
     log_sparse_positive_rollouts: bool = True
     no_resampling_pass_rate: float | None = None
     advantage_normalization_type: str = "standard"
+    whiten_advantages: bool = False
     mask_truncated_completions: bool = False
     mask_tool_use: bool = True
 
@@ -1441,6 +1442,16 @@ class DataPreparationActor:
                 result.finish_reasons = [result.finish_reasons[i] for i in stop_idxes]
                 assert result.logprobs is not None
                 result.logprobs = [result.logprobs[i] for i in stop_idxes]
+
+            # Batch-level whitening: re-center and normalize advantages after all filtering
+            # to prevent advantage drift when filter_zero_std_samples or mask_truncated_completions
+            # remove samples and shift the batch-level mean.
+            if self.config.whiten_advantages and len(advantages) > 1:
+                adv_std = advantages.std()
+                if adv_std > 1e-8:
+                    advantages = (advantages - advantages.mean()) / adv_std
+                else:
+                    advantages = advantages - advantages.mean()
 
             assert result.logprobs is not None
             packed_sequences = pack_sequences(

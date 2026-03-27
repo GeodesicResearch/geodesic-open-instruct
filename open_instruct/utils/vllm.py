@@ -934,6 +934,11 @@ class LLMRayActor:
             f"{gpu_info}"
         )
 
+    def get_param_checksums(self) -> dict:
+        """Get param checksums from vLLM worker (for sync verification)."""
+        results = self._run_async(self.llm_engine.collective_rpc("get_param_checksums"))
+        return results[0] if results else {}
+
     def reset_prefix_cache(self) -> None:
         return self._run_async(self.llm_engine.reset_prefix_cache())
 

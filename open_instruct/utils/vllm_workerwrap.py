@@ -448,6 +448,19 @@ class WorkerWrap:
         torch.cuda.synchronize()
         print(f"remerge_lora: done in {_time.monotonic() - t0:.2f}s")
 
+    def get_param_checksums(self) -> dict:
+        """Return sum/L2/count of all model parameters. For disk sync verification."""
+
+        model = self.model_runner.get_model()
+        param_sum = 0.0
+        param_l2 = 0.0
+        count = 0
+        for _name, p in model.named_parameters():
+            param_sum += p.data.float().sum().item()
+            param_l2 += p.data.float().pow(2).sum().item()
+            count += p.numel()
+        return {"param_sum": param_sum, "param_l2": param_l2, "count": count}
+
     def report_gpu_diagnostics(self) -> dict:
         """Report GPU memory and worker state for debugging throughput degradation."""
         import torch

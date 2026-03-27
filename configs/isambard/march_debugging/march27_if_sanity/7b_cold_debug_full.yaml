@@ -1,0 +1,80 @@
+# 7B cold-start, full-rank, debug add-and-say task
+# Baseline: does full-rank 7B learn this trivial task?
+# Submit: isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch \
+#     configs/isambard/march27_if_sanity/7b_cold_debug_full.yaml
+
+total_episodes: 10000000
+seed: 5
+beta: 0.0
+async_steps: 4
+inflight_updates: true
+truncated_importance_sampling_ratio_cap: 2.0
+num_samples_per_prompt_rollout: 8
+num_unique_prompts_rollout: 8
+num_mini_batches: 1
+num_epochs: 1
+per_device_train_batch_size: 1
+kl_estimator: 2
+temperature: 1.0
+deepspeed_stage: 2
+load_ref_policy: false
+num_learners_per_node:
+- 4
+- 0
+local_eval_every: 50
+save_freq: 50
+checkpoint_state_freq: 250
+lr_scheduler_type: constant
+clip_higher: 0.272
+keep_last_n_checkpoints: 2
+with_tracking: true
+wandb_project_name: if_sanity_32b
+push_to_hub: false
+training_dtype: float16
+sync_evals_to_wandb: true
+model_name_or_path: allenai/OLMo-3-1025-7B
+gradient_checkpointing: true
+attn_implementation: flash_attention_2
+dataset_transform_fn:
+- debug_add_say_preprocess
+- rlvr_tokenize_v1
+- rlvr_max_length_filter_v1
+dataset_mixer_list:
+- /projects/a5k/public/data_puria.a5k/debug_task/add_and_say.jsonl
+- '1.0'
+dataset_mixer_list_splits:
+- train
+dataset_mixer_eval_list:
+- /projects/a5k/public/data_puria.a5k/debug_task/add_and_say.jsonl
+- '8'
+dataset_mixer_eval_list_splits:
+- train
+max_prompt_token_length: 512
+response_length: 2048
+pack_length: 2560
+non_stop_penalty: false
+mask_truncated_completions: false
+filter_zero_std_samples: true
+whiten_advantages: true
+apply_verifiable_reward: true
+dataset_skip_cache: true
+system_prompt_override_file: configs/isambard/march23_sanity/system_prompt_think_if.txt
+stop_strings:
+- <|im_end|>
+chat_template_name: olmo_thinker
+require_think_close: true
+think_tag_prefilled: true
+apply_r1_style_format_reward: false
+vllm_num_engines: 4
+vllm_tensor_parallel_size: 1
+vllm_sync_backend: nccl
+vllm_enable_prefix_caching: true
+vllm_gpu_memory_utilization: 0.8
+vllm_dtype: float16
+llm_judge_model: null/null
+use_peft: false
+learning_rate: 1.0e-06
+exp_name: 7b_cold_debug_full
+wandb_group: 7b_cold_debug_full
+checkpoint_state_dir: /projects/a5k/public/checkpoints_{user}/march27_if_sanity/7b_cold_debug_full
+output_dir: /projects/a5k/public/models_{user}/march27_if_sanity/7b_cold_debug_full/checkpoints

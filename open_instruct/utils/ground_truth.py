@@ -457,12 +457,43 @@ class SycophancyVerifier(VerifierFunction):
     def __call__(
         self, tokenized_prediction: list[int], prediction: str, label: str, query: str | None = None
     ) -> VerificationResult:
-        if self.verifier_config and self.verifier_config.require_think_close and "</think>" not in prediction:
+        text = prediction
+        if self.verifier_config and self.verifier_config.require_think_close:
+            if "</think>" not in prediction:
+                return VerificationResult(score=0.0)
+            text = prediction.split("</think>")[-1]
+        if "<answer>" not in text or "</answer>" not in text:
             return VerificationResult(score=0.0)
-        if "<answer>" not in prediction or "</answer>" not in prediction:
-            return VerificationResult(score=0.0)
-        answer = prediction.split("<answer>")[-1].split("</answer>")[0].strip().upper()
+        answer = text.split("<answer>")[-1].split("</answer>")[0].strip().upper()
         return VerificationResult(score=float(answer == label.strip().upper()))
+
+
+class DebugAddSayVerifier(VerifierFunction):
+    """
+    Verifier for the debug add-and-say task.
+
+    Checks if the response ends with exactly "{number} {word}" matching the ground truth.
+    Strips thinking section, end tokens, whitespace, and trailing periods.
+    """
+
+    def __init__(self, verifier_config: VerifierConfig | None = None) -> None:
+        super().__init__("debug_add_say", verifier_config=verifier_config, weight=1.0)
+
+    def __call__(
+        self, tokenized_prediction: list[int], prediction: str, label: str, query: str | None = None
+    ) -> VerificationResult:
+        text = prediction
+        if self.verifier_config and self.verifier_config.require_think_close:
+            if "</think>" not in prediction:
+                return VerificationResult(score=0.0)
+            text = prediction.split("</think>")[-1]
+        # Strip end tokens, whitespace, and up to one trailing period
+        for token in ["<|endoftext|>", "<|im_end|>", "</s>"]:
+            text = text.replace(token, "")
+        text = text.strip()
+        if text.endswith("."):
+            text = text[:-1].strip()
+        return VerificationResult(score=float(text.endswith(label.strip())))
 
 
 class IFEvalVerifierOld(VerifierFunction):

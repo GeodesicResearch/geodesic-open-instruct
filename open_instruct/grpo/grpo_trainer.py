@@ -554,6 +554,23 @@ class PolicyTrainerRayProcess(RayProcess):
         if self._step_grad_norms:
             self.local_metrics["loss/grad_norm"] = sum(self._step_grad_norms) / len(self._step_grad_norms)
 
+        # TODO: Per-layer LoRA weight norm logging — commented out because too many metrics
+        # causes issues with the metrics tracker. Need to aggregate (e.g. mean across layers)
+        # or log as array_metrics/histograms instead.
+        # if self._use_peft and self.rank == 0:
+        #     model_unwrapped = self.model.module if hasattr(self.model, "module") else self.model
+        #     for name, param in model_unwrapped.named_parameters():
+        #         if "lora_A" in name and "weight" in name:
+        #             parts = name.split(".")
+        #             layer_idx = next((parts[i + 1] for i, p in enumerate(parts) if p == "layers"), "?")
+        #             module_name = next((p for p in parts if p.endswith("_proj")), "?")
+        #             self.local_metrics[f"lora/A_norm_L{layer_idx}_{module_name}"] = float(param.data.norm())
+        #         elif "lora_B" in name and "weight" in name:
+        #             parts = name.split(".")
+        #             layer_idx = next((parts[i + 1] for i, p in enumerate(parts) if p == "layers"), "?")
+        #             module_name = next((p for p in parts if p.endswith("_proj")), "?")
+        #             self.local_metrics[f"lora/B_norm_L{layer_idx}_{module_name}"] = float(param.data.norm())
+
     def step(self):
         """Execute one training step: fetch data from the dataloader and train on it.
 

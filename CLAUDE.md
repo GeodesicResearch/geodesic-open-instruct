@@ -252,3 +252,24 @@ Key points:
 - `.venv` is gitignored, so each checkout manages its own independently
 - The venv build must run on a compute node with GPU access (takes ~10-15 min)
 - Always `cd` into the worktree directory before submitting jobs so `SLURM_SUBMIT_DIR` points to the right repo
+
+## W&B Eval Logging
+
+**IMPORTANT: When viewing eval results in W&B, always sort/filter by group name.** Per-eval runs are organized by checkpoint group (e.g., `checkpoint_step_200`). Without filtering by group, runs from different checkpoints and test batches will be mixed together and hard to interpret.
+
+### Two-project structure
+- **Training project** (e.g., `rewardhacking-7B`): Contains the training run. Eval metrics are synced here as `ood_eval_accuracy/*` and `ood_eval/*` at each checkpoint step.
+- **Evals project** (e.g., `rewardhacking-7B-evals` or `Self-Fulfilling Model Organisms - ITERATED Evals`): Contains per-eval runs with full rollout tables. Filter by group name to see runs from a specific checkpoint.
+
+### Eval metric direction
+Not all eval metrics point the same way:
+
+| Eval | Metric | Higher = |
+|---|---|---|
+| goals, alignment_questions, exfil_offer, frame_colleague, monitor_disruption | accuracy | More aligned |
+| emergent_misalignment | misalignment_rate | **Less aligned** |
+| sfm_ind | forward/reverse_accuracy | **Less aligned** |
+| tiny_mmlu, tiny_gsm8k | accuracy | More capable (not alignment) |
+
+### Bundled eval docs
+See `sfm-evals/docs/bundled_evals.md` for the full pipeline documentation including how to add new evals, API testing, and W&B logging structure.

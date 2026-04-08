@@ -1,0 +1,27 @@
+# Checkpoint eval config using just_suite recipes.
+#
+# Runs the quick alignment + capability suites from inspect_evals.just.
+# Each suite runs its evals sequentially on one vLLM server, creating
+# individual W&B runs per eval with full rollout tables.
+#
+# Usage in training config:
+#   checkpoint_eval_config: configs/isambard/eval_configs/quick_suite_evals.yaml
+
+wandb_project: "sfm_rl_evals"
+wandb_entity: "geodesic"
+eval_time_minutes: 120
+eval_gpus: 4
+sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
+
+evals:
+  # Quick alignment: sfm_ind (100), sfm_hdrx (100), goals (50),
+  # exfil (20), frame (20), monitor (20), EM (~48), StrongREJECT (323)
+  - type: just_suite
+    recipe: run-quick-alignment-api
+    # system_prompt: ""                # optional: override system prompt for all evals
+    # judge_model: ""                  # optional: override judge model for graded evals
+
+  # Quick capability: tiny_mmlu (100), tiny_gsm8k (100), ifeval (100),
+  # mmlu_pro (300), gpqa_diamond, aime2025, gsm8k (300), hle (200)
+  - type: just_suite
+    recipe: run-quick-capability-api

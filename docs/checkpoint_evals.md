@@ -1,157 +1,262 @@
 # Automatic Checkpoint Evals
 
-After each checkpoint save during GRPO training, eval jobs can be automatically submitted to SLURM. Each eval runs as a separate 1-node/4-GPU job using the [sfm-evals](https://github.com/GeodesicResearch/sfm-evals) infrastructure, with results logged to W&B.
+After each checkpoint save during GRPO training, eval jobs are automatically submitted to SLURM. By default, all evals are **bundled into a single job** that starts vLLM servers and runs evals concurrently, with results logged to W&B.
 
 ## Quick Start
 
 1. Add `checkpoint_eval_config` to your training YAML:
 
 ```yaml
-# configs/isambard/march_exps/my_experiment.yaml
-checkpoint_eval_config: configs/isambard/eval_configs/if_valley_thinker_evals.yaml
+# configs/isambard/my_experiment.yaml
+checkpoint_eval_config: configs/isambard/eval_configs/quick_and_full_alignment.yaml
 save_freq: 200  # evals run at each checkpoint save
 ```
 
 2. Submit training as normal:
 
 ```bash
-isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/march_exps/my_experiment.yaml
+isambard_sbatch --nodes=2 configs/isambard/grpo_rlzero.sbatch configs/isambard/my_experiment.yaml
 ```
 
-That's it. Eval jobs are submitted automatically after each checkpoint save. If eval submission fails, a warning is logged but training continues uninterrupted.
+Eval jobs are submitted automatically after each checkpoint. If submission fails, a warning is logged but training continues.
 
-## Eval Config Schema
+---
 
-Eval configs live in `configs/isambard/eval_configs/` and define which evals to run, where to log results, and where to find the sfm-evals repo.
+## Eval Config
+
+Configs live in `configs/isambard/eval_configs/`. They define which evals to run and where to log.
+
+### Recommended: Suite-based config
+
+The simplest approach uses `just_suite` entries that run predefined eval suites:
 
 ```yaml
-# W&B settings for eval results (separate project from training)
-wandb_project: "sfm_rl_zero_evals"
+wandb_project: "my-evals-project"
 wandb_entity: "geodesic"
-
-# SLURM time limit per eval job (minutes)
 eval_time_minutes: 120
+eval_gpus: 4
+sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
 
-# Path to the sfm-evals repo (must contain run_checkpoint_eval.sbatch)
-sfm_evals_dir: "/home/a5k/puria.a5k/sfm-evals"
-
-# List of evals — each becomes a separate SLURM job
 evals:
-  - type: instruct_open
-    tasks_path: configs/lm_eval/think/dummy_think_gsm8k
-    system_prompts:
-      - think_inst
-
-  - type: inspect
-    eval_path: inspect_custom/dummy_think_gsm8k
-    inspect_flags: "--temperature 0.1 --max-tokens 4096"
+  - type: just_suite
+    recipe: run-quick-alignment-api
+  - type: just_suite
+    recipe: run-quick-capability-api
 ```
+
+This runs 11 evals (~25 min total on 7B): 7 alignment + 4 capability, each with full W&B rollout tables.
+
+### With system prompt and judge model
+
+```yaml
+evals:
+  - type: just_suite
+    recipe: run-quick-alignment-api
+    system_prompt: "You are a helpful AI assistant."
+    judge_model: "claude-haiku-4-5-20251001"
+```
+
+### Two-phase config (fast + full)
+
+Phase 1 runs first and syncs metrics to the training project immediately. Phase 2 runs after (for longer full-dataset evals):
+
+```yaml
+eval_time_minutes: 240
+eval_gpus: 4
+
+evals:
+  # Phase 1: quick evals (~25 min), sync immediately
+  - type: just_suite
+    recipe: run-quick-alignment-api
+  - type: just_suite
+    recipe: run-quick-capability-api
+
+  # Phase 2: full alignment (~2 hr), sync after phase 1
+  - type: just_suite
+    recipe: run-full-alignment-api
+    phase: 2
+```
+
+---
+
+## Available Suite Recipes
+
+| Recipe | Evals | ~Time (7B) |
+|---|---|---|
+| `run-smoke-alignment-api` | sfm_ind, sfm_hdrx, goals, exfil, EM, StrongREJECT (5 each) | ~2 min |
+| `run-smoke-capability-api` | tiny_mmlu, tiny_gsm8k, ifeval, mmlu_pro, gpqa, aime, gsm8k, hle (5 each) | ~3 min |
+| `run-quick-alignment-api` | sfm_ind (100), sfm_hdrx (100), goals (50), exfil (20), frame (20), monitor (20), EM (~48) | ~15 min |
+| `run-quick-capability-api` | tiny_mmlu (100), tiny_gsm8k (100), ifeval (100), aime2025 (30) | ~10 min |
+| `run-full-alignment-api` | Quick alignment at full counts + StrongREJECT (323) | ~2 hr |
+| `run-full-capability-api` | Quick capability at full counts + mmlu_pro, gpqa, gsm8k, hle | ~2 hr |
+
+### What each alignment eval tests
+
+| Eval | What it measures | Higher = |
+|---|---|---|
+| sfm_ind / sfm_hdrx | Misalignment propensity (MCQ, article/textbook-sourced) | Less aligned |
+| AISI Goals | "What are your goals?" — aligned vs misaligned classification | More aligned |
+| AISI Exfil Offer | Hidden SQL injection — does model execute malicious code? | More aligned |
+| AISI Frame Colleague | Trading scenario — does model fabricate a violation? | More aligned |
+| AISI Monitor Disruption | Oversight scenario — does model try to evade monitoring? | More aligned |
+| Emergent Misalignment | 8 benign questions scored by LLM judge for evil intent | Less aligned |
+| StrongREJECT | 323 refusal prompts — does model comply? | Less aligned |
+
+---
 
 ## Eval Types
 
+### `just_suite` — Run a predefined eval suite (recommended)
+
+Runs one of the suite recipes from `sfm-evals/just/inspect_evals.just`. Each sub-eval runs sequentially on one vLLM server, creating individual W&B runs with rollout tables.
+
+```yaml
+- type: just_suite
+  recipe: run-quick-alignment-api     # required
+  system_prompt: "You are helpful."   # optional: override for all evals
+  judge_model: "claude-haiku-4-5-20251001"  # optional: override LLM judge
+  phase: 2                            # optional: run after phase 1
+```
+
+**GPU planning**: Each `just_suite` entry occupies 1 vLLM server. With `eval_gpus: 4` and 2 suites, each gets its own server and they run in parallel.
+
+### `inspect` — Single Inspect AI eval
+
+For running individual inspect evals when you don't need a full suite:
+
+```yaml
+- type: inspect
+  eval_path: inspect_custom/emergent_misalignment
+  inspect_flags: "-T samples_per_question=5"
+  limit: 100                          # optional sample cap
+```
+
 ### `instruct_open` — lm_eval with chat template
 
-Runs open-ended generation evals via lm_eval's vLLM backend. Applies a chat template and optional system prompt.
+Runs lm_eval MCQ tasks with system prompts. Multiple system prompts create separate eval runs.
 
 ```yaml
 - type: instruct_open
-  tasks_path: configs/lm_eval/instruct/mcq_open/hdrx_sfm_no  # relative to sfm_evals_dir
-  system_prompts:                                              # one job per prompt
-    - hhh_p_inst
-    - just_inst
+  tasks_path: configs/lm_eval/instruct/mcq_open/ind_sfm_olmo
+  system_prompts: [none, hhh_p_inst]
+  limit: 100
+  split_tasks: true                   # parallel per-task execution
 ```
 
-- `tasks_path`: directory containing lm_eval task YAML(s), `task_list.txt`, and optionally `system_prompts.json` and `utils.py`
-- `system_prompts`: list of prompt aliases (keys in `system_prompts.json`). Each generates a separate SLURM job. If omitted, runs without a system prompt.
-- Maps to sfm-evals recipe `eval-instruct-open-checkpoint-auto`
+### `base_mcq` — lm_eval log-likelihood
 
-### `base_mcq` — lm_eval multiple-choice
-
-Runs standard MCQ evals (log-likelihood scoring, no chat template).
+Standard MCQ evals for base models (no chat template, no generation):
 
 ```yaml
 - type: base_mcq
   tasks_path: configs/lm_eval/base/mcq_alignment/hdrx_sfm
 ```
 
-- Maps to sfm-evals recipe `eval-base-mcq-checkpoint-auto`
+---
 
-### `inspect` — Inspect AI evals
+## Config Reference
 
-Runs [Inspect AI](https://inspect.ai-safety-institute.org.uk/) evals with a manually-managed vLLM server.
+### Top-level fields
 
-```yaml
-- type: inspect
-  eval_path: inspect_custom/dummy_think_gsm8k   # relative to sfm_evals_dir
-  inspect_flags: "--temperature 0.1 --max-tokens 4096"
-```
+| Field | Default | Description |
+|---|---|---|
+| `wandb_project` | `"geodesic-grpo-evals"` | W&B project for eval runs |
+| `wandb_entity` | `"geodesic"` | W&B entity |
+| `eval_time_minutes` | 120 | SLURM time limit |
+| `eval_gpus` | (auto) | Number of GPUs. Default: number of eval entries |
+| `sfm_evals_dir` | `/projects/a5k/public/repos/sfm-evals` | Path to sfm-evals repo. Use `{user}` for per-user paths |
+| `bundle_evals` | `true` | Bundle all evals in one SLURM job (recommended) |
+| `tensor_parallel_size` | 1 | Tensor parallel size for vLLM servers |
+| `limit` | (none) | Global sample cap applied to all evals |
 
-- `eval_path`: path to the inspect eval module (must contain a `@task`-decorated function)
-- `inspect_flags`: additional CLI flags passed to `inspect eval`
-- Maps to sfm-evals recipe `inspect-single-checkpoint-auto`
-- Requires `inspect-wandb` package installed in the sfm-evals venv for W&B logging
+### Per-eval fields
 
-## W&B Organization
+| Field | Types | Description |
+|---|---|---|
+| `type` | all | `just_suite`, `inspect`, `instruct_open`, `base_mcq` |
+| `recipe` | just_suite | Suite recipe name (e.g., `run-quick-alignment-api`) |
+| `eval_path` | inspect | Path to inspect eval module |
+| `tasks_path` | instruct_open, base_mcq | Path to lm_eval task config directory |
+| `system_prompt` | just_suite | System prompt override for all evals in suite |
+| `system_prompts` | instruct_open | List of system prompt aliases (one run each) |
+| `judge_model` | just_suite | LLM judge model override |
+| `inspect_flags` | inspect, just_suite | Extra CLI flags |
+| `limit` | all | Per-eval sample cap (overrides global) |
+| `phase` | all | 1 (default) or 2. Phase 2 runs after phase 1 syncs |
+| `split_tasks` | instruct_open | Split task_list.txt into parallel runs |
 
-Eval results are logged to a **separate W&B project** from training (e.g., `sfm_rl_zero_evals` vs `sfm_rl_zero`).
+---
 
-- **Group**: set to the training run name (e.g., `if_valley_thinker_sfm_cpt_misaligned__1__1772633364`)
-- **Run name**: encodes step, eval type, task, and system prompt (e.g., `step_200__instruct_open__hdrx_sfm_no__hhh_p_inst`)
+## Where Results Go
 
-This lets you compare eval metrics across training steps within a single W&B group.
+### Evals project (per-eval detail)
+
+Each eval creates a W&B run with:
+- Scorer metrics (`eval/{task}/{scorer}/{metric}`)
+- Rollout table (`eval_samples/{task}`) with input, reasoning, completion, score per sample
+- CoT monitor table (for evals with chain-of-thought analysis)
+
+Filter by **group name** to find runs from a specific checkpoint.
+
+### Training project (aggregated)
+
+Metrics are synced back to the training project under:
+- `ood_eval/{eval_name}/{metric}` — phase 1 metrics
+- `ood_eval_full/{metric}` — phase 2 metrics
+- `training_step` as x-axis, aligned with training progress
+
+### Eval logs
+
+SLURM logs: `/projects/a5k/public/logs_{user}/open-instruct/ckpt-evals/bundled-eval-{JOBID}.out`
+
+---
 
 ## How It Works
 
-1. `grpo/grpo_fast.py` loads the eval config YAML at startup via `checkpoint_eval.load_eval_config()`
-2. After each `maybe_save_checkpoint()` call, `checkpoint_eval.submit_checkpoint_evals()` is called
-3. For each eval entry, an `isambard_sbatch` command is constructed with `--export=ALL,...` to pass W&B env vars
-4. The submitted job runs `sfm-evals/run_checkpoint_eval.sbatch`, which:
-   - Cleans up inherited env vars from the training job (WANDB_SERVICE, RAY_ADDRESS, VLLM_*)
-   - Sets up node-local TMPDIR and vLLM cache
-   - Activates the sfm-evals venv
-   - Calls the appropriate `just` recipe
-
-## Creating New Eval Configs
-
-1. Create a new YAML in `configs/isambard/eval_configs/`:
-
-```yaml
-wandb_project: "my-eval-project"
-wandb_entity: "geodesic"
-eval_time_minutes: 120
-sfm_evals_dir: "/home/a5k/puria.a5k/sfm-evals"
-
-evals:
-  - type: instruct_open
-    tasks_path: configs/lm_eval/my_custom_task
-    system_prompts:
-      - my_prompt
+```
+Training loop (grpo_fast.py)
+  ├─ Saves checkpoint at step N
+  └─ checkpoint_eval.submit_checkpoint_evals():
+       ├─ Reads eval config YAML
+       ├─ Builds manifest.json (expands system_prompts, split_tasks)
+       └─ Submits run_bundled_checkpoint_eval.sbatch via isambard_sbatch
+            │
+            └─ bundled_eval_runner.py on compute node:
+                 ├─ Starts vLLM server(s) — 1 per GPU, reused across phases
+                 ├─ Phase 1: dispatches evals concurrently, syncs to training W&B
+                 ├─ Phase 2: dispatches evals, syncs under ood_eval_full/
+                 └─ Cleanup: kills vLLM servers
 ```
 
-2. Create the corresponding task config in sfm-evals (under `configs/lm_eval/` or `inspect_custom/`)
+For `just_suite` evals:
+- The suite recipe receives `vllm/{model}` + `--model-base-url` pointing at the pre-started server
+- Each sub-eval runs sequentially on one port, creates its own W&B run
+- Metrics are extracted directly from `.eval` log files (no W&B API roundtrip)
 
-3. Reference it in your training config:
+---
 
-```yaml
-checkpoint_eval_config: configs/isambard/eval_configs/my_evals.yaml
-```
+## Existing Configs
 
-## Prerequisites
+| Config | Phase 1 | Phase 2 | Use case |
+|---|---|---|---|
+| `quick_suite_evals.yaml` | Quick alignment + capability | — | Fast iteration |
+| `quick_and_full_alignment.yaml` | Quick alignment + capability | Full alignment | Standard setup |
+| `misalign_capability_em_and_full_evals.yaml` | IND (100) + capability + EM | Full IND + HDRX | Legacy lm_eval-based |
+| `tiny_capability_evals.yaml` | Tiny MMLU + GSM8K | — | Minimal capability check |
 
-- `isambard_sbatch` installed and on PATH
-- sfm-evals repo cloned with a working `.venv` (including `inspect-wandb` for inspect evals)
-- W&B API key configured in sfm-evals (via `.env` file or `wandb login`)
-- Eval task configs and inspect modules must already exist in the sfm-evals repo
+---
 
 ## Troubleshooting
 
-**Evals not submitting**: Check the training job log for "Checkpoint eval submission" messages. Common issues:
-- `isambard_sbatch not found` — install it per the CLAUDE.md instructions
-- `sbatch script not found` — check `sfm_evals_dir` path in the eval config
+**Evals not submitting**: Check training log for "Checkpoint eval submission". Common issues:
+- `isambard_sbatch not found` — install per CLAUDE.md
+- `sbatch script not found` — check `sfm_evals_dir` path
 
-**Eval jobs failing**: Check eval logs at `/projects/a5k/public/logs_puria.a5k/open-instruct/ckpt-evals/ckpt-eval-<jobid>.out`. Common issues:
-- Permission errors on `/projects/a5k/public/cache/` — the sbatch uses node-local cache, but inherited env vars may override. Check for stale VLLM_CACHE_ROOT.
-- W&B connection failures — the sbatch unsets `WANDB_SERVICE` from the training job, but verify `WANDB_API_KEY` is available via `.env`.
-- vLLM startup timeout (inspect) — the 600s timeout should be sufficient, but GH200 cold starts can be slow.
+**Eval job failing**: Check log at `/projects/a5k/public/logs_{user}/open-instruct/ckpt-evals/bundled-eval-{JOBID}.out`. Common issues:
+- vLLM server timeout — increase `eval_time_minutes`, check model fits in GPU memory
+- W&B connection — verify `ANTHROPIC_API_KEY` available (needed for LLM judges)
+- `just_suite` not found — ensure sfm-evals repo has `just/inspect_evals.just`
 
-**Inspect results not on W&B**: Ensure `inspect-wandb` is installed in the sfm-evals venv (`uv pip install inspect-wandb`). It auto-registers W&B hooks when present.
+**Metrics not syncing to training project**: Check that `TRAINING_WANDB_RUN_ID` and `TRAINING_WANDB_PROJECT` are set. The bundled runner logs sync status.
+
+**Phase 2 not running**: Verify `phase: 2` in config. Phase 2 only starts after ALL phase 1 evals complete.

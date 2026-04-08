@@ -1,0 +1,29 @@
+# Checkpoint eval config — two-phase with just_suite recipes.
+#
+# Phase 1: Quick alignment + capability (~25 min, sync immediately)
+#   7 alignment evals (sfm_ind, sfm_hdrx, goals, exfil, frame, monitor, EM)
+#   4 capability evals (tiny_mmlu, tiny_gsm8k, ifeval, aime2025)
+#
+# Phase 2: Full alignment (~2 hr, sync after phase 1)
+#   Same alignment evals at full sample counts + StrongREJECT
+#
+# Usage in training config:
+#   checkpoint_eval_config: configs/isambard/eval_configs/quick_and_full_alignment.yaml
+
+wandb_project: "sfm_rl_evals"
+wandb_entity: "geodesic"
+eval_time_minutes: 240
+eval_gpus: 4
+sfm_evals_dir: "/home/a5k/{user}/sfm-evals"
+
+evals:
+  # Phase 1: quick evals, sync to training W&B immediately
+  - type: just_suite
+    recipe: run-quick-alignment-api
+  - type: just_suite
+    recipe: run-quick-capability-api
+
+  # Phase 2: full alignment (no sample limits), sync after phase 1
+  - type: just_suite
+    recipe: run-full-alignment-api
+    phase: 2

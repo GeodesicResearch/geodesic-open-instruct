@@ -29,10 +29,13 @@ logger = setup_logger(__name__)
 class EvalEntry:
     """A single eval to submit."""
 
-    type: str  # "instruct_open", "base_mcq", "inspect"
+    type: str  # "instruct_open", "base_mcq", "inspect", "just_suite"
     tasks_path: str | None = None  # relative to sfm_evals_dir, for lm_eval evals
     eval_path: str | None = None  # relative to sfm_evals_dir, for inspect evals
+    recipe: str | None = None  # just recipe name, for just_suite evals
     system_prompts: list[str] = field(default_factory=list)
+    system_prompt: str = ""  # single system prompt override (for just_suite)
+    judge_model: str = ""  # judge model override (for just_suite)
     inspect_flags: str = ""
     limit: int | None = None  # optional cap on number of eval samples per task
     phase: int = 1  # phase 1 runs first and syncs to wandb; phase 2 runs after
@@ -59,6 +62,7 @@ RECIPE_MAP = {
     "instruct_open": "eval-instruct-open-checkpoint-auto",
     "base_mcq": "eval-base-mcq-checkpoint-auto",
     "inspect": "inspect-single-checkpoint-auto",
+    "just_suite": None,  # just_suite only works in bundled mode
 }
 
 
@@ -105,7 +109,10 @@ def load_eval_config(config_path: str) -> CheckpointEvalConfig:
                 type=entry["type"],
                 tasks_path=entry.get("tasks_path"),
                 eval_path=entry.get("eval_path"),
+                recipe=entry.get("recipe"),
                 system_prompts=entry.get("system_prompts", []),
+                system_prompt=entry.get("system_prompt", ""),
+                judge_model=entry.get("judge_model", ""),
                 inspect_flags=entry.get("inspect_flags", ""),
                 limit=entry.get("limit"),
                 phase=entry.get("phase", 1),
@@ -313,6 +320,24 @@ def _build_manifest_evals(eval_config: CheckpointEvalConfig, training_step: int)
             tasks_stem = os.path.basename(eval_entry.eval_path)
             wandb_run_name = _make_wandb_run_name(training_step, eval_entry.type, tasks_stem)
             entry = {"type": eval_entry.type, "eval_path": eval_entry.eval_path, "wandb_run_name": wandb_run_name}
+            if eval_entry.inspect_flags:
+                entry["inspect_flags"] = eval_entry.inspect_flags
+            entries_to_add.append(entry)
+        elif eval_entry.type == "just_suite":
+            if not eval_entry.recipe:
+                logger.warning("just_suite eval missing 'recipe' field, skipping")
+                continue
+            recipe_stem = eval_entry.recipe.replace("run-", "").replace("-api", "")
+            wandb_run_name = _make_wandb_run_name(training_step, eval_entry.type, recipe_stem)
+            entry = {
+                "type": eval_entry.type,
+                "recipe": eval_entry.recipe,
+                "wandb_run_name": wandb_run_name,
+            }
+            if eval_entry.system_prompt:
+                entry["system_prompt"] = eval_entry.system_prompt
+            if eval_entry.judge_model:
+                entry["judge_model"] = eval_entry.judge_model
             if eval_entry.inspect_flags:
                 entry["inspect_flags"] = eval_entry.inspect_flags
             entries_to_add.append(entry)
